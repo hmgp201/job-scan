@@ -20,7 +20,7 @@
 // automatically when you connect a Blob store to the project).
 const fs = require('fs');
 const path = require('path');
-const { put, head } = require('@vercel/blob');
+const { put, head, BlobNotFoundError } = require('@vercel/blob');
 
 const DATA_DIR = '/tmp/job-watch-data';
 process.env.JOB_WATCH_DATA_DIR = DATA_DIR; // must be set BEFORE requiring job_watch
@@ -30,6 +30,14 @@ const STATE_BLOB_PATH = 'job-watch/state.json';
 const LEDGER = 'job_watch_log.csv';
 const COUNTER = 'run_counter.json';
 const SLUG_CACHE = 'slug_cache.json';
+
+// If two triggers hit /api/scan close together (duplicate cron-job.org jobs,
+// a slow-request retry, Vercel's own cron overlapping the external pinger),
+// both would otherwise load the same pre-scan ledger and independently
+// decide the same jobs are new, double-alerting Telegram. This lock makes
+// the second request bail out instead. TTL is maxDuration + a buffer so a
+// genuinely still-running scan isn't mistaken for a stale/crashed lock.
+const LOCK_TTL_MS = 90 * 1000;
 
 // Files bundled with the deploy (see includeFiles in vercel.json).
 function findRepoFile(name) {
@@ -41,24 +49,56 @@ function findRepoFile(name) {
 }
 
 async function loadState() {
+  console.log('[blob] loadState: head()', STATE_BLOB_PATH);
+  let info;
   try {
-    const info = await head(STATE_BLOB_PATH); // throws if the blob doesn't exist yet
-    const res = await fetch(`${info.url}?ts=${Date.now()}`); // bust any CDN cache
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null; // first run
+    info = await head(STATE_BLOB_PATH);
+  } catch (err) {
+    if (err instanceof BlobNotFoundError) {
+      console.log('[blob] loadState: not found (first run)');
+      return null;
+    }
+    console.error('[blob] loadState: head() threw', err.name, err.message);
+    throw err; // a real failure (bad token, network, etc.) must NOT be mistaken
+               // for "first run" — that would silently drop the ledger and
+               // re-alert every job on every run. Let the caller fail loudly.
   }
+  console.log('[blob] loadState: head() ok', { size: info.size, uploadedAt: info.uploadedAt, cacheControl: info.cacheControl });
+  const res = await fetch(`${info.url}?ts=${Date.now()}`); // bust any CDN cache
+  console.log('[blob] loadState: fetch status', res.status);
+  if (!res.ok) throw new Error(`state blob fetch failed: HTTP ${res.status}`);
+  const json = await res.json();
+  console.log('[blob] loadState: parsed', {
+    ledgerCsvLen: json?.ledgerCsv?.length ?? null,
+    hasRunCounter: json?.runCounter != null,
+    hasSlugCache: json?.slugCache != null,
+    runningSince: json?.runningSince ?? null,
+    updatedAt: json?.updatedAt ?? null
+  });
+  return json;
 }
 
 async function saveState(state) {
-  await put(STATE_BLOB_PATH, JSON.stringify(state), {
-    access: 'public', // the URL is unguessable; contents are just job-post metadata
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    contentType: 'application/json',
-    cacheControlMaxAge: 60
+  console.log('[blob] saveState: put()', {
+    ledgerCsvLen: state?.ledgerCsv?.length ?? null,
+    hasRunCounter: state?.runCounter != null,
+    hasSlugCache: state?.slugCache != null,
+    runningSince: state?.runningSince ?? null,
+    hasToken: !!process.env.BLOB_READ_WRITE_TOKEN
   });
+  try {
+    const result = await put(STATE_BLOB_PATH, JSON.stringify(state), {
+      access: 'public', // the URL is unguessable; contents are just job-post metadata
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: 'application/json',
+      cacheControlMaxAge: 60
+    });
+    console.log('[blob] saveState: put() ok', { url: result.url, pathname: result.pathname });
+  } catch (err) {
+    console.error('[blob] saveState: put() threw', err.name, err.message);
+    throw err;
+  }
 }
 
 const readIf = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null);
@@ -75,10 +115,32 @@ module.exports = async (req, res) => {
     }
   }
 
+  console.log('[scan] invoked', { trigger: req.headers['authorization'] ? 'auth-header' : (req.query?.key ? 'query-key' : 'none') });
+
   fs.mkdirSync(DATA_DIR, { recursive: true });
 
   // Pull persisted state; bootstrap the ledger from the repo copy on first run.
-  const state = await loadState();
+  let state;
+  try {
+    state = await loadState();
+  } catch (err) {
+    console.error('state load failed:', err);
+    return res.status(500).json({ ok: false, error: 'state load failed (refusing to scan without the ledger, to avoid re-alerting): ' + err.message });
+  }
+
+  // Bail out if another invocation is still (or very recently was) running,
+  // rather than racing it on the same ledger. See LOCK_TTL_MS comment above.
+  if (state?.runningSince && Date.now() - state.runningSince < LOCK_TTL_MS) {
+    console.log('[scan] skipped: lock held', { runningSince: state.runningSince, ageMs: Date.now() - state.runningSince });
+    return res.status(200).json({ ok: true, skipped: 'scan already in progress' });
+  }
+  try {
+    await saveState({ ...state, runningSince: Date.now() });
+  } catch (err) {
+    console.error('lock claim failed:', err);
+    return res.status(500).json({ ok: false, error: 'lock claim failed: ' + err.message });
+  }
+
   let ledgerCsv = state?.ledgerCsv;
   if (ledgerCsv == null) {
     const repoLedger = findRepoFile(LEDGER);
@@ -118,6 +180,7 @@ module.exports = async (req, res) => {
     if (!scanError) scanError = err;
   }
 
+  console.log('[scan] done', { ok: !scanError, error: scanError?.message ?? null });
   return scanError
     ? res.status(500).json({ ok: false, error: scanError.message })
     : res.status(200).json({ ok: true });
