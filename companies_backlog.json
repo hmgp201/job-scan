@@ -1,0 +1,578 @@
+[
+  {
+    "name": "Marqeta",
+    "ats": "greenhouse",
+    "slug": "marqeta",
+    "jobCount": 2,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Marqeta\""
+  },
+  {
+    "name": "Unit",
+    "ats": "ashby",
+    "slug": "unit",
+    "jobCount": 4,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Unit\""
+  },
+  {
+    "name": "Highnote",
+    "ats": "greenhouse",
+    "slug": "highnote",
+    "jobCount": 7,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Highnote\""
+  },
+  {
+    "name": "Rutter",
+    "ats": "ashby",
+    "slug": "rutter",
+    "jobCount": 1,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Rutter\""
+  },
+  {
+    "name": "Lob",
+    "ats": "greenhouse",
+    "slug": "lob",
+    "jobCount": 9,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Lob\""
+  },
+  {
+    "name": "Radar",
+    "ats": "greenhouse",
+    "slug": "radar",
+    "jobCount": 14,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Radar\""
+  },
+  {
+    "name": "Stytch",
+    "ats": "ashby",
+    "slug": "stytch",
+    "jobCount": 5,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Stytch\""
+  },
+  {
+    "name": "Skyflow",
+    "ats": "ashby",
+    "slug": "skyflow",
+    "jobCount": 6,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Skyflow\""
+  },
+  {
+    "name": "Very Good Security",
+    "ats": "lever",
+    "slug": "verygoodsecurity",
+    "jobCount": 6,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Very Good Security\""
+  },
+  {
+    "name": "Evervault",
+    "ats": "ashby",
+    "slug": "evervault",
+    "jobCount": 3,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Evervault\""
+  },
+  {
+    "name": "Consensys",
+    "ats": "greenhouse",
+    "slug": "consensys",
+    "jobCount": 5,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Consensys\""
+  },
+  {
+    "name": "Paxos",
+    "ats": "ashby",
+    "slug": "paxos",
+    "jobCount": 13,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Paxos\""
+  },
+  {
+    "name": "Ledger",
+    "ats": "ashby",
+    "slug": "ledger",
+    "jobCount": 9,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Ledger\""
+  },
+  {
+    "name": "Figment",
+    "ats": "greenhouse",
+    "slug": "figment",
+    "jobCount": 1,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Figment\""
+  },
+  {
+    "name": "Dune",
+    "ats": "ashby",
+    "slug": "dune",
+    "jobCount": 2,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Dune\""
+  },
+  {
+    "name": "OpenSea",
+    "ats": "ashby",
+    "slug": "opensea",
+    "jobCount": 2,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"OpenSea\""
+  },
+  {
+    "name": "Phantom",
+    "ats": "ashby",
+    "slug": "phantom",
+    "jobCount": 16,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Phantom\""
+  },
+  {
+    "name": "CoinTracker",
+    "ats": "ashby",
+    "slug": "cointracker",
+    "jobCount": 1,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"CoinTracker\""
+  },
+  {
+    "name": "Airbyte",
+    "ats": "ashby",
+    "slug": "airbyte",
+    "jobCount": 11,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Airbyte\""
+  },
+  {
+    "name": "PostHog",
+    "ats": "ashby",
+    "slug": "posthog",
+    "jobCount": 11,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"PostHog\""
+  },
+  {
+    "name": "Modal",
+    "ats": "ashby",
+    "slug": "modal",
+    "jobCount": 31,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Modal\""
+  },
+  {
+    "name": "Render",
+    "ats": "ashby",
+    "slug": "render",
+    "jobCount": 33,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Render\""
+  },
+  {
+    "name": "PlanetScale",
+    "ats": "greenhouse",
+    "slug": "planetscale",
+    "jobCount": 10,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"PlanetScale\""
+  },
+  {
+    "name": "Prisma",
+    "ats": "greenhouse",
+    "slug": "prisma",
+    "jobCount": 2,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Prisma\""
+  },
+  {
+    "name": "Algolia",
+    "ats": "greenhouse",
+    "slug": "algolia",
+    "jobCount": 32,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Algolia\""
+  },
+  {
+    "name": "Honeycomb",
+    "ats": "greenhouse",
+    "slug": "honeycomb",
+    "jobCount": 15,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Honeycomb\""
+  },
+  {
+    "name": "Cribl",
+    "ats": "greenhouse",
+    "slug": "cribl",
+    "jobCount": 68,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Cribl\""
+  },
+  {
+    "name": "CircleCI",
+    "ats": "greenhouse",
+    "slug": "circleci",
+    "jobCount": 5,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"CircleCI\""
+  },
+  {
+    "name": "Harness",
+    "ats": "greenhouse",
+    "slug": "harnessinc",
+    "jobCount": 84,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Harness\""
+  },
+  {
+    "name": "Buildkite",
+    "ats": "greenhouse",
+    "slug": "buildkite",
+    "jobCount": 7,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Buildkite\""
+  },
+  {
+    "name": "Wiz",
+    "ats": "greenhouse",
+    "slug": "wizinc",
+    "jobCount": 124,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Wiz\""
+  },
+  {
+    "name": "Anyscale",
+    "ats": "ashby",
+    "slug": "anyscale",
+    "jobCount": 14,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Anyscale\""
+  },
+  {
+    "name": "Pinecone",
+    "ats": "ashby",
+    "slug": "pinecone",
+    "jobCount": 7,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Pinecone\""
+  },
+  {
+    "name": "Weaviate",
+    "ats": "ashby",
+    "slug": "weaviate",
+    "jobCount": 1,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Weaviate\""
+  },
+  {
+    "name": "Writer",
+    "ats": "ashby",
+    "slug": "writer",
+    "jobCount": 50,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Writer\""
+  },
+  {
+    "name": "Thoropass",
+    "ats": "greenhouse",
+    "slug": "thoropass",
+    "jobCount": 8,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Thoropass\""
+  },
+  {
+    "name": "LogicGate",
+    "ats": "greenhouse",
+    "slug": "logicgate",
+    "jobCount": 13,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"LogicGate\""
+  },
+  {
+    "name": "Transcend",
+    "ats": "greenhouse",
+    "slug": "transcendinc",
+    "jobCount": 1,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Transcend\""
+  },
+  {
+    "name": "DataGrail",
+    "ats": "greenhouse",
+    "slug": "datagrail",
+    "jobCount": 3,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"DataGrail\""
+  },
+  {
+    "name": "Material Security",
+    "ats": "ashby",
+    "slug": "materialsecurity",
+    "jobCount": 5,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Material Security\""
+  },
+  {
+    "name": "Oyster",
+    "ats": "ashby",
+    "slug": "oyster",
+    "jobCount": 19,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Oyster\""
+  },
+  {
+    "name": "Lattice",
+    "ats": "greenhouse",
+    "slug": "lattice",
+    "jobCount": 9,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Lattice\""
+  },
+  {
+    "name": "Culture Amp",
+    "ats": "greenhouse",
+    "slug": "cultureamp",
+    "jobCount": 29,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Culture Amp\""
+  },
+  {
+    "name": "15Five",
+    "ats": "lever",
+    "slug": "15five",
+    "jobCount": 1,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"15Five\""
+  },
+  {
+    "name": "Leapsome",
+    "ats": "ashby",
+    "slug": "leapsome",
+    "jobCount": 18,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Leapsome\""
+  },
+  {
+    "name": "Kustomer",
+    "ats": "ashby",
+    "slug": "kustomer",
+    "jobCount": 8,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Kustomer\""
+  },
+  {
+    "name": "Common Room",
+    "ats": "ashby",
+    "slug": "commonroom",
+    "jobCount": 6,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Common Room\""
+  },
+  {
+    "name": "Attio",
+    "ats": "ashby",
+    "slug": "attio",
+    "jobCount": 44,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Attio\""
+  },
+  {
+    "name": "Close",
+    "ats": "ashby",
+    "slug": "close",
+    "jobCount": 5,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Close\""
+  },
+  {
+    "name": "Pipedrive",
+    "ats": "lever",
+    "slug": "pipedrive",
+    "jobCount": 16,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Pipedrive\""
+  },
+  {
+    "name": "Valon",
+    "ats": "ashby",
+    "slug": "valon",
+    "jobCount": 21,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Valon\""
+  },
+  {
+    "name": "Snapdocs",
+    "ats": "ashby",
+    "slug": "snapdocs",
+    "jobCount": 6,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Snapdocs\""
+  },
+  {
+    "name": "Doma",
+    "ats": "greenhouse",
+    "slug": "doma",
+    "jobCount": 1,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Doma\""
+  },
+  {
+    "name": "Orchard",
+    "ats": "greenhouse",
+    "slug": "orchard",
+    "jobCount": 27,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Orchard\""
+  },
+  {
+    "name": "Homeward",
+    "ats": "greenhouse",
+    "slug": "homeward",
+    "jobCount": 4,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Homeward\""
+  },
+  {
+    "name": "Pacaso",
+    "ats": "greenhouse",
+    "slug": "pacaso",
+    "jobCount": 5,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Pacaso\""
+  },
+  {
+    "name": "Fundrise",
+    "ats": "lever",
+    "slug": "fundrise",
+    "jobCount": 2,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Fundrise\""
+  },
+  {
+    "name": "Envoy",
+    "ats": "ashby",
+    "slug": "envoy",
+    "jobCount": 21,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Envoy\""
+  },
+  {
+    "name": "TurboTenant",
+    "ats": "greenhouse",
+    "slug": "turbotenant",
+    "jobCount": 7,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"TurboTenant\""
+  },
+  {
+    "name": "Baselane",
+    "ats": "lever",
+    "slug": "baselane",
+    "jobCount": 3,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Baselane\""
+  },
+  {
+    "name": "ClickUp",
+    "ats": "ashby",
+    "slug": "clickup",
+    "jobCount": 69,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"ClickUp\""
+  },
+  {
+    "name": "Miro",
+    "ats": "ashby",
+    "slug": "miro",
+    "jobCount": 43,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Miro\""
+  },
+  {
+    "name": "Calendly",
+    "ats": "greenhouse",
+    "slug": "calendly",
+    "jobCount": 12,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Calendly\""
+  },
+  {
+    "name": "Carta",
+    "ats": "greenhouse",
+    "slug": "carta",
+    "jobCount": 60,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Carta\""
+  },
+  {
+    "name": "Ridgeline",
+    "ats": "greenhouse",
+    "slug": "ridgeline",
+    "jobCount": 40,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Ridgeline\""
+  },
+  {
+    "name": "Betterment",
+    "ats": "greenhouse",
+    "slug": "betterment",
+    "jobCount": 32,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Betterment\""
+  },
+  {
+    "name": "Wealthfront",
+    "ats": "lever",
+    "slug": "wealthfront",
+    "jobCount": 22,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Wealthfront\""
+  },
+  {
+    "name": "Chime",
+    "ats": "greenhouse",
+    "slug": "chime",
+    "jobCount": 59,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Chime\""
+  },
+  {
+    "name": "Customer.io",
+    "ats": "greenhouse",
+    "slug": "customerio",
+    "jobCount": 28,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Customer.io\""
+  },
+  {
+    "name": "Iterable",
+    "ats": "greenhouse",
+    "slug": "iterable",
+    "jobCount": 24,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Iterable\""
+  },
+  {
+    "name": "Resend",
+    "ats": "ashby",
+    "slug": "resend",
+    "jobCount": 11,
+    "verified": "slug-derived",
+    "note": "add with: node job_watch.js --add-company=\"Resend\""
+  },
+  {
+    "name": "Make",
+    "ats": "greenhouse",
+    "slug": "make",
+    "jobCount": 16,
+    "verified": "name-verified",
+    "note": "add with: node job_watch.js --add-company=\"Make\""
+  }
+]

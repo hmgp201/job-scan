@@ -1,0 +1,18 @@
+{
+  "name": "job-watch",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Job board watcher: scans ATS APIs, filters, alerts to Telegram. Runs locally (CLI) or on Vercel (/api/scan endpoint, cron or external pinger).",
+  "main": "job_watch.js",
+  "scripts": {
+    "scan": "node job_watch.js",
+    "watch": "node job_watch.js --watch=900",
+    "bot": "node job_watch.js --bot"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.0"
+  }
+}

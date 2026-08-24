@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Plaid",
+    "ats": "ashby",
+    "slug": "plaid",
+    "addedAt": "2026-08-23T11:42:46.537Z",
+    "via": "manual"
+  },
+  {
+    "name": "affirm",
+    "ats": "greenhouse",
+    "slug": "affirm",
+    "addedAt": "2026-08-23T11:56:22.581Z",
+    "via": "telegram"
+  }
+]
