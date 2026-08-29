@@ -82,7 +82,15 @@
  * company+title, catching aggregator-vs-canonical duplicates) is not already
  * in the CSV, and every successfully sent alert is appended to the CSV in
  * the same moment. Failed/unconfigured sends are NOT recorded, so they
- * retry on the next run. Works the same for --watch and cron runs.
+ * retry on the next run. Works the same for --watch and scheduled runs.
+ *
+ * SCHEDULING: .github/workflows/scan.yml runs a plain `node job_watch.js`
+ * every 15 minutes via GitHub Actions cron, then commits any changed state
+ * files (job_watch_log.csv, run_counter.json, slug_cache.json) back to the
+ * repo so the ledger persists between runs. Set TELEGRAM_BOT_TOKEN and
+ * TELEGRAM_CHAT_ID as repo secrets (Settings -> Secrets and variables ->
+ * Actions). Trigger a run manually from the Actions tab (workflow_dispatch)
+ * to test without waiting for the schedule.
  *
  * TELEGRAM ALERTS: set two environment variables before running:
  *   TELEGRAM_BOT_TOKEN  -> from @BotFather on Telegram (message it "/newbot")
@@ -114,9 +122,9 @@ const path = require('path');
 })();
 
 // Where state files live (companies.csv, job_watch_log.csv, run_counter.json,
-// slug_cache.json, telegram_offset.json). Locally this is the script's own
-// directory; on Vercel the api/scan.js function points it at /tmp and syncs
-// the files to/from Vercel Blob storage around each run.
+// slug_cache.json, telegram_offset.json). This is always the script's own
+// directory — including in the GitHub Actions runner, where the workflow
+// commits the changed state files back to the repo after each run.
 const DATA_DIR = process.env.JOB_WATCH_DATA_DIR || __dirname;
 
 // =================================================================
@@ -1754,8 +1762,7 @@ async function main() {
 }
 
 // One complete scan cycle: fetch -> filter -> print -> alert -> record.
-// Exported so the Vercel function (api/scan.js) can run scans without the
-// CLI; the CLI paths above all call this too.
+// Exported for reuse outside the CLI paths above, which all call this too.
 async function performScan(opts = {}) {
   const {
     jsonOut = false,
@@ -1836,7 +1843,7 @@ async function performScan(opts = {}) {
         console.log(`[Telegram] Sent ${sent}/${toSend.length} alert(s) at/above ${minMatch}% match — each recorded in the CSV.`);
       }
       // No heartbeat by design: Telegram receives ONLY job alerts. A quiet
-      // scan is visible in the terminal/Vercel function logs instead.
+      // scan is visible in the terminal/GitHub Actions run logs instead.
       console.log(`Funnel: ${results.length} passed filters -> ${notYetAlerted.length} not yet in CSV -> ${toSend.length} at/above ${minMatch}% match -> ${sent} sent to Telegram & saved to CSV.`);
     } else if (notYetAlerted.length) {
       console.log(`[--no-telegram] Nothing recorded to the CSV — these will alert on the next Telegram-enabled run.`);
