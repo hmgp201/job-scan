@@ -9,27 +9,43 @@
  *      WITHOUT rewriting sentences (so it never reads as AI-tailored)
  *
  * Usage:
- *   node job_watch.js                    -> scan once, print results (min salary $180k)
+ *   node job_watch.js                    -> scan once using configs/default/config.json
+ *   node job_watch.js --config=other      -> scan once using configs/other/config.json
  *   node job_watch.js --json             -> scan once, print raw JSON
- *   node job_watch.js --min-salary=200000 -> override the $180k floor
+ *   node job_watch.js --min-salary=200000 -> override the config's salary floor
  *   node job_watch.js --strict           -> hide postings that don't list a salary at all
  *   node job_watch.js --watch=1800       -> re-scan every 1800s (30 min), only alert on NEW postings
  *   node job_watch.js --min-match=50     -> only send Telegram alerts for jobs at/above this match %
- *   node job_watch.js --max-age=7        -> override the 3-day freshness window
+ *   node job_watch.js --max-age=7        -> override the config's freshness window
  *   node job_watch.js --quiet            -> hide per-request API logs (they go
  *                                           to stderr; stdout/--json stay clean)
  *
- * HARD FILTERS (edit the constants below to change):
- *   - Postings older than MAX_AGE_DAYS (3) are dropped.
- *   - Titles containing EXCLUDED_TITLE_TERMS (marketing etc.) are dropped.
- *   - Location must be remote (US) OR hybrid/onsite in Washington DC /
- *     Richmond VA. Remote sorts above hybrid everywhere.
+ * CONFIG FILES (configs/<profile>/config.json): a config is everything that
+ * makes one search distinct — CV tracks (title keywords + skill terms per
+ * track), the seed company list, salary/match/age thresholds, excluded title
+ * terms, and which Telegram bot/chat env vars to use. This lets the same
+ * script run more than one independent search (different CVs, different
+ * companies, alerting to different Telegram chats) without them sharing
+ * state — each profile's config.json and all the state files it generates
+ * live together in one folder under configs/. See the CONFIG FILE section
+ * below (~line 130) for the file format and how to add a new one.
+ *
+ * HARD FILTERS (set per-config; see configs/default/config.json):
+ *   - Postings older than maxAgeDays are dropped.
+ *   - Titles containing excludedTitleTerms (marketing etc.) are dropped.
+ *   - Location must be remote-in-target-region OR hybrid/onsite in one of the
+ *     config's listed cities (set per-config as "location"; defaults to US
+ *     remote / Washington DC / Richmond VA if omitted — see locationAllowed()).
+ *     The same excluded-region check also runs against the TITLE (e.g. a
+ *     "Solutions Engineer - EMEA" or "AE, LATAM" title is dropped even if the
+ *     location field itself is ambiguous or just says "Remote").
+ *     Remote sorts above hybrid everywhere.
  *
  *   node job_watch.js --add-company="Second Nature"
  *       -> auto-resolves the company's Greenhouse/Ashby/Lever board slug and
- *          saves it to companies_extra.json (merged with the built-in list on
- *          every run). No more hunting for slugs by hand. Repeatable flag.
- *          If auto-resolution picks the wrong board (or finds several), force it:
+ *          saves it to this config's companies.csv. No more hunting for slugs
+ *          by hand. Repeatable flag. If auto-resolution picks the wrong board
+ *          (or finds several), force it:
  *   node job_watch.js --add-company="Second Nature" --ats=greenhouse --slug=secondnature
  *
  *   node job_watch.js --add-company="Retool" --careers-url="https://retool.com/careers"
@@ -42,33 +58,25 @@
  *          with client-side JS can't be scraped this way — the add command
  *          tests the page and tells you what it found before saving.
  *
- *   THE COMPANY LIST LIVES IN companies.csv (created on first run, seeded
- *   from the built-in list; legacy companies_extra.json is auto-migrated).
- *   Columns: Name,ATS,Slug,URL,AddedAt,Via — edit it by hand freely.
- *   ATS is greenhouse|ashby|lever (uses Slug) or custom (uses URL).
+ *   THE COMPANY LIST LIVES IN <profile folder>/companies.csv (created on
+ *   first run, seeded from the active config's "companies" array; legacy
+ *   companies_extra.json is auto-migrated). Columns: Name,ATS,Slug,URL,
+ *   AddedAt,Via — edit it by hand freely. ATS is greenhouse|ashby|lever
+ *   (uses Slug) or custom (uses URL).
  *
- *   node job_watch.js --bot              -> just listen for Telegram commands
- *          (no scheduled scanning). Use this alongside cron-driven scans.
- *
- *   TELEGRAM COMMANDS (work while --watch or --bot is running):
- *     /add Plaid                    -> resolve + track a company, instant reply
- *     /add Name | ats | slug        -> force a specific board
- *     /addpage Name | https://...   -> scrape a company's own careers page
- *     /remove Name                  -> stop tracking a company
- *     /list                         -> show every tracked company
- *     /scan                         -> run a scan right now
- *     /help                         -> show this list
- *   Only messages from YOUR chat id are accepted. Run only ONE listening
- *   process at a time (--watch with Telegram configured already listens;
- *   don't also run --bot, or Telegram will 409 one of them).
+ *   NOTE: this is a one-way notifier, not a chat bot — it only SENDS
+ *   Telegram messages. It runs as a scheduled GitHub Actions cron job with
+ *   no long-running process to receive replies, so there's no way to manage
+ *   the company list from Telegram; use --add-company / --careers-url or
+ *   edit companies.csv directly instead.
  *
  *   node job_watch.js --discover         -> ALSO run an open-discovery pass over
  *          the Remotive and The Muse public aggregator APIs. Broader net, lower
  *          precision: surfaces roles at companies NOT on your list. Hits go
  *          through the exact same track/salary/match pipeline. Any discovered
  *          company whose job clears --min-match gets its ATS slug auto-resolved
- *          and added to companies_extra.json for direct tracking going forward
- *          (disable that with --no-autoadd). Works with --watch too.
+ *          and added to this config's companies.csv for direct tracking going
+ *          forward (disable that with --no-autoadd). Works with --watch too.
  *
  * SALARY FILTERING: pulls the range straight out of the job description text
  * (most US states legally require this). A posting is dropped only if its
@@ -76,29 +84,35 @@
  * posting is still shown (flagged "not listed") unless you pass --strict —
  * plenty of legitimate $180k+ roles simply don't disclose in the JD.
  *
- * DEDUPLICATION lives in job_watch_log.csv — the CSV is the ledger of every
- * job ever alerted to Telegram. Each run fetches ALL jobs meeting the
- * criteria and prints them; a job goes to Telegram only if its URL (or
- * company+title, catching aggregator-vs-canonical duplicates) is not already
- * in the CSV, and every successfully sent alert is appended to the CSV in
- * the same moment. Failed/unconfigured sends are NOT recorded, so they
- * retry on the next run. Works the same for --watch and scheduled runs.
+ * DEDUPLICATION is date-based, not a per-job ledger: last_scan.json holds one
+ * timestamp — the start of the last run that actually sent Telegram alerts.
+ * Each run fetches ALL jobs meeting the criteria and prints them; a job goes
+ * to Telegram only if the ATS reports it posted/updated after that timestamp
+ * (or there's no timestamp yet, e.g. the first run for this profile). The
+ * timestamp only advances once a run actually attempts to send (i.e. not
+ * --no-telegram), so a disabled/misconfigured Telegram doesn't cause jobs to
+ * be silently skipped once it's fixed. Works the same for --watch and
+ * scheduled runs. See the DEDUP CURSOR section below for the trade-off this
+ * makes vs. remembering every job ever seen.
  *
- * SCHEDULING: .github/workflows/scan.yml runs a plain `node job_watch.js`
- * every 15 minutes via GitHub Actions cron, then commits any changed state
- * files (job_watch_log.csv, run_counter.json, slug_cache.json) back to the
- * repo so the ledger persists between runs. Set TELEGRAM_BOT_TOKEN and
- * TELEGRAM_CHAT_ID as repo secrets (Settings -> Secrets and variables ->
- * Actions). Trigger a run manually from the Actions tab (workflow_dispatch)
- * to test without waiting for the schedule.
+ * SCHEDULING: .github/workflows/scan.yml runs `node job_watch.js --config=...`
+ * per configured search every 15 minutes via GitHub Actions cron, then commits
+ * any changed state files back to the repo so each config's scan cursor
+ * persists between runs. Set each config's Telegram env vars (default.json uses
+ * TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID; a second config would use whatever
+ * botTokenEnv/chatIdEnv names it declares, e.g. TELEGRAM_BOT_TOKEN_OTHER) as
+ * repo secrets (Settings -> Secrets and variables -> Actions). Trigger a run
+ * manually from the Actions tab (workflow_dispatch) to test without waiting
+ * for the schedule.
  *
- * TELEGRAM ALERTS: set two environment variables before running:
- *   TELEGRAM_BOT_TOKEN  -> from @BotFather on Telegram (message it "/newbot")
- *   TELEGRAM_CHAT_ID    -> message your new bot once, then visit
- *                          https://api.telegram.org/bot<TOKEN>/getUpdates
- *                          and copy the "chat":{"id": ...} value
- * Only NEW postings that meet --min-match (default 50%) get pushed — this
- * keeps the channel to genuinely good matches, not every posting found.
+ * TELEGRAM ALERTS: each config names two env vars under "telegram" (default:
+ * TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID) — set them before running:
+ *   <botTokenEnv>  -> from @BotFather on Telegram (message it "/newbot")
+ *   <chatIdEnv>    -> message your new bot once, then visit
+ *                     https://api.telegram.org/bot<TOKEN>/getUpdates
+ *                     and copy the "chat":{"id": ...} value
+ * Only NEW postings that meet --min-match get pushed — this keeps the chat
+ * to genuinely good matches, not every posting found.
  *
  * Requires: Node 18+ (built-in fetch). No npm install needed.
  * ---------------------------------------------------------------
@@ -121,11 +135,67 @@ const path = require('path');
   } catch { /* no .env — fine, rely on real env vars */ }
 })();
 
-// Where state files live (companies.csv, job_watch_log.csv, run_counter.json,
-// slug_cache.json, telegram_offset.json). This is always the script's own
-// directory — including in the GitHub Actions runner, where the workflow
-// commits the changed state files back to the repo after each run.
-const DATA_DIR = process.env.JOB_WATCH_DATA_DIR || __dirname;
+// =================================================================
+// CONFIG FILE / PROFILE FOLDER — a "profile" is one self-contained folder
+// under configs/ holding config.json (everything that makes one search
+// distinct: CV tracks, company list seed, salary/match/age thresholds,
+// location policy, and which Telegram bot/chat the alerts go to) PLUS every
+// state file that config generates (companies.csv, last_scan.json,
+// slug_cache.json, companies_backlog.json). Anything that's the same for
+// every profile (this script, .env, package.json, the
+// GitHub Actions workflow) stays at the repo root, not duplicated per
+// profile — only what's unique to a search lives in its folder.
+//
+//   node job_watch.js --config=default              (-> configs/default/config.json)
+//   node job_watch.js --config=configs/default       (same, explicit)
+//   node job_watch.js --config=configs/default/config.json  (fully explicit)
+//   node job_watch.js                                (defaults to configs/default/config.json)
+//
+// To run a second, independent search: `mkdir configs/other-search`, copy
+// configs/default/config.json into it and edit its "tracks"/"companies"/
+// thresholds/"location" (a candidate based somewhere else should set
+// "location" to their own target region/cities — see LOCATION POLICY below),
+// and point its "telegram.botTokenEnv"/"telegram.chatIdEnv" at a different
+// pair of env var names (e.g. TELEGRAM_BOT_TOKEN_OTHER) whose actual values
+// you set in .env locally and as separate GitHub Actions secrets — the
+// config file itself never holds a real token, only the name of the env var
+// to read. That folder's companies.csv etc. get created fresh on first run,
+// seeded from that config's "companies" array — no
+// collision with configs/default/'s state.
+// =================================================================
+function resolveConfigPath(raw) {
+  if (!raw) return path.join(__dirname, 'configs', 'default', 'config.json');
+  if (raw.endsWith('.json')) return path.resolve(__dirname, raw); // explicit file
+  if (raw.includes('/')) return path.resolve(__dirname, raw, 'config.json'); // explicit folder
+  return path.join(__dirname, 'configs', raw, 'config.json'); // shorthand: profile name
+}
+
+function loadConfig() {
+  const arg = process.argv.find(a => a.startsWith('--config='));
+  const configPath = resolveConfigPath(arg ? arg.split('=').slice(1).join('=') : null);
+  let raw;
+  try { raw = fs.readFileSync(configPath, 'utf8'); }
+  catch { throw new Error(`Config file not found: ${configPath}`); }
+  let cfg;
+  try { cfg = JSON.parse(raw); }
+  catch (err) { throw new Error(`Config file ${configPath} is not valid JSON: ${err.message}`); }
+  if (!cfg.tracks || !Object.keys(cfg.tracks).length) throw new Error(`Config file ${configPath} needs a non-empty "tracks" object.`);
+  cfg._path = configPath;
+  cfg.name = cfg.name || path.basename(path.dirname(configPath));
+  cfg.telegram = cfg.telegram || {};
+  cfg.telegram.botTokenEnv = cfg.telegram.botTokenEnv || 'TELEGRAM_BOT_TOKEN';
+  cfg.telegram.chatIdEnv = cfg.telegram.chatIdEnv || 'TELEGRAM_CHAT_ID';
+  return cfg;
+}
+
+const CONFIG = loadConfig();
+console.error(`[config] Using "${CONFIG.name}" (${CONFIG._path}) — Telegram via ${CONFIG.telegram.botTokenEnv}/${CONFIG.telegram.chatIdEnv}`);
+
+// Where state files live (companies.csv, last_scan.json, slug_cache.json):
+// always the same folder the active config.json itself lives in, so a
+// profile's config and its state travel together. JOB_WATCH_DATA_DIR still
+// overrides this, e.g. for tests.
+const DATA_DIR = process.env.JOB_WATCH_DATA_DIR || path.dirname(CONFIG._path);
 
 // =================================================================
 // API REQUEST LOGGING
@@ -134,8 +204,6 @@ const DATA_DIR = process.env.JOB_WATCH_DATA_DIR || __dirname;
 // latency — so you can see exactly which requests happen and whether
 // they're working. stdout stays clean, so --json is still parseable.
 // Disable with --quiet. Telegram tokens are redacted from logged URLs.
-// The routine getUpdates long-poll (fires every ~25s in --watch/--bot)
-// is only logged when it FAILS, so it doesn't drown everything else.
 // =================================================================
 let API_LOG_ENABLED = true; // main() flips this off when --quiet is passed
 const apiStats = { total: 0, failed: 0 };
@@ -155,15 +223,12 @@ globalThis.fetch = async (url, opts) => {
   apiStats.total++;
   const method = opts?.method || 'GET';
   const shown = redactUrl(url);
-  const isRoutinePoll = shown.includes('/getUpdates');
   const t0 = Date.now();
-  if (!isRoutinePoll) apiLog(`#${id} -> ${method} ${shown}`);
+  apiLog(`#${id} -> ${method} ${shown}`);
   try {
     const res = await rawFetch(url, opts);
     if (!res.ok) apiStats.failed++;
-    if (!isRoutinePoll || !res.ok) {
-      apiLog(`#${id} <- HTTP ${res.status}${res.ok ? '' : ` ${res.statusText}`} in ${Date.now() - t0}ms  ${shown}`);
-    }
+    apiLog(`#${id} <- HTTP ${res.status}${res.ok ? '' : ` ${res.statusText}`} in ${Date.now() - t0}ms  ${shown}`);
     return res;
   } catch (err) {
     apiStats.failed++;
@@ -173,292 +238,87 @@ globalThis.fetch = async (url, opts) => {
 };
 
 // =================================================================
-// 1. YOUR THREE CV TRACKS — keywords pulled directly from each resume's
-//    SKILLS section. This is what gets diffed against each job description.
-//    Add/edit freely as your resumes evolve.
+// 1. CV TRACKS — keywords pulled directly from each resume's SKILLS section,
+//    diffed against each job description. A config can define as many tracks
+//    as it wants (this project's default has three); see configs/default/config.json.
 // =================================================================
-const TRACKS = {
-  tpm_automation: {
-    label: 'TPM / Automation & AI',
-    resumeFile: 'Harry_Pethel_-_TPM.pdf',
-    titleKeywords: [
-      'technical program manager', 'tpm', 'business operations', 'biz ops',
-      'bizops', 'automation engineer', 'internal tools', 'platform operations',
-      'workflow automation', 'operations lead', 'head of operations', 'ai agent',
-      'automation lead', 'process automation'
-    ],
-    // exact terms you already have real skill in — used for synonym swapping
-    skillTerms: [
-      'n8n', 'zapier', 'retool', 'google apps script', 'airtable', 'clay',
-      'la growth machine', 'llm agents', 'prompt engineering', 'workflow design',
-      'javascript', 'sql', 'postgresql', 'express.js', 'git', 'github',
-      'rest api', 'soap api', 'webhooks', 'snowflake', 'auth0', 'stripe',
-      'paypal', 'chargebee', 'netlify', 'hubspot', 'salesforce', 'zendesk',
-      'slack', 'notion', 'talentlms', 'activecollab', 'cross-functional',
-      'process design', 'roadmap prioritization', 'billing operations',
-      'vendor management', 'partner management', 'documentation systems',
-      'capm', 'project management'
-    ]
-  },
-  solutions_engineer: {
-    label: 'Solutions Engineering / Pre-Sales',
-    resumeFile: 'Harry_Pethel_-Solutions_Engineer_docx.pdf',
-    titleKeywords: [
-      'solutions engineer', 'sales engineer', 'pre-sales', 'presales',
-      'solutions architect', 'technical account manager', 'implementation engineer',
-      'integration engineer', 'forward deployed engineer', 'deployment strategist',
-      'technical program manager'
-    ],
-    skillTerms: [
-      'discovery', 'solution design', 'product demos', 'proof of concept', 'poc',
-      'security questionnaire', 'integration scoping', 'onboarding', 'escalation',
-      'expansion', 'renewals', 'rest api', 'soap api', 'webhooks', 'javascript',
-      'sql', 'postgresql', 'express.js', 'html', 'css', 'git', 'github',
-      'snowflake', 'n8n', 'zapier', 'retool', 'google apps script', 'airtable',
-      'clay', 'la growth machine', 'llm', 'zendesk', 'hubspot', 'salesforce',
-      'slack', 'notion', 'netlify', 'talentlms', 'activecollab'
-    ]
-  },
-  customer_success: {
-    label: 'Customer Success / Support Leadership',
-    resumeFile: 'Harry_Pethel_-_Support_and_Success.pdf',
-    titleKeywords: [
-      'customer success', 'support manager', 'support lead', 'customer success manager',
-      'csm', 'head of support', 'director of customer success', 'technical support lead',
-      'support operations', 'customer experience', 'client success'
-    ],
-    skillTerms: [
-      'enterprise account ownership', 'onboarding', 'implementation', 'escalation management',
-      'renewals', 'expansion', 'qa', 'voice of the customer', 'knowledge base',
-      'video documentation', 'team management', 'enablement', 'llm', 'n8n', 'zapier',
-      'retool', 'google apps script', 'airtable', 'sql', 'postgresql', 'javascript',
-      'rest api', 'soap api', 'webhooks', 'auth0', 'stripe', 'paypal', 'chargebee',
-      'snowflake', 'git', 'github', 'html', 'css', 'zendesk', 'hubspot', 'salesforce',
-      'slack', 'notion', 'talentlms', 'activecollab', 'netlify'
-    ]
-  }
-};
+const TRACKS = CONFIG.tracks;
 
 // Common synonym pairs: [job-description phrasing, your resume phrasing]
 // When a JD uses the left term and you only have the right term (or vice versa),
 // the tool flags it as a 1-word/1-phrase swap — never a rewrite.
+const SYNONYMS = CONFIG.synonyms || [];
+
 // Minimum acceptable base salary. Many states (CA, CO, NY, WA, IL, etc.)
 // legally require salary ranges in postings, so this is extracted straight
 // from the job description text — no external salary API needed.
-// Override at runtime with --min-salary=200000
-const MIN_SALARY = 180000;
+// Set per-config as "minSalary"; override at runtime with --min-salary=200000
+const MIN_SALARY = CONFIG.minSalary ?? 180000;
 
 // Minimum keyword-match % for a job to be "good enough" to push to Telegram
 // (and, with --discover, to auto-add the company for direct tracking).
-// NOTE ON SCALE: the score is (skill terms found in the JD) / (your ENTIRE
-// ~40-term track list), so even excellent fits score 12-21% — a JD never
-// mentions all 40 of your terms. Calibrated 2026-08-23 against a full scan
-// (118 matching roles: median 8%, top decile 13%, max 21%). 12 ≈ top quartile.
-// Override at runtime with --min-match=15
-const GOOD_MATCH_THRESHOLD = 4;
+// NOTE ON SCALE: the score is (skill terms found in the JD) / (the track's
+// ENTIRE skill-term list), so even excellent fits often score in the teens —
+// a JD never mentions every term on the list. Calibrate per-config against
+// a full scan of your own results.
+// Set per-config as "minMatch"; override at runtime with --min-match=15
+const GOOD_MATCH_THRESHOLD = CONFIG.minMatch ?? 4;
 
 // Ignore postings older than this many days (based on the ATS's own
-// posted/updated timestamp). Override at runtime with --max-age=7
-const MAX_AGE_DAYS = 3;
+// posted/updated timestamp). Set per-config as "maxAgeDays"; override at
+// runtime with --max-age=7
+const MAX_AGE_DAYS = CONFIG.maxAgeDays ?? 3;
 
 // Titles containing any of these are dropped no matter what track they'd
 // otherwise match (e.g. "Strategy & Operations Lead, Enterprise Marketing").
-const EXCLUDED_TITLE_TERMS = ['marketing', 'demand generation', 'demand gen'];
+// Set per-config as "excludedTitleTerms".
+const EXCLUDED_TITLE_TERMS = CONFIG.excludedTitleTerms || [];
 
-// LOCATION POLICY: remote roles, or hybrid/onsite ONLY in Washington DC or
-// Richmond VA. Remote-tagged roles that are explicitly non-US (e.g. "Remote -
-// EMEA") are dropped. Jobs with no location listed are kept — vet manually.
-// Remote roles sort above the hybrid ones in output and alerts.
+// LOCATION POLICY (set per-config as "location"; see configs/default/config.json):
+// remote roles are allowed if they name/imply the config's target region (or
+// say nothing at all — kept for manual vetting) and don't name an excluded
+// region (e.g. "Remote - EMEA" dropped for a US-targeted config); hybrid/
+// onsite roles are allowed only in the config's listed cities. A config that
+// omits "location" gets this project's original policy (US remote, or
+// hybrid/onsite in Washington DC / Richmond VA) as the default. Remote roles
+// sort above hybrid ones in output and alerts. remoteExcludePattern/
+// remoteIncludePattern also get checked against the job TITLE (see the
+// consider() pipeline below) — some postings only name their region there
+// ("Solutions Engineer - EMEA", "AE, LATAM") rather than in location.
+const LOCATION_CONFIG = CONFIG.location || {};
+const REMOTE_INCLUDE_RE = new RegExp(
+  LOCATION_CONFIG.remoteIncludePattern ||
+  'united states|\\bus\\b|\\busa\\b|north america|americas|worldwide|anywhere|global', 'i');
+const REMOTE_EXCLUDE_RE = new RegExp(
+  LOCATION_CONFIG.remoteExcludePattern ||
+  'emea|europe|apac|latam|canada|\\buk\\b|united kingdom|australia|india|germany|japan|singapore|brazil|mexico|poland|philippines|south korea', 'i');
+const HYBRID_ONSITE_ALLOWED = (LOCATION_CONFIG.hybridOnsiteAllowed
+  || ['washington, dc', 'washington, d.c.', ', dc', 'richmond, va', 'richmond, virginia']
+).map(s => s.toLowerCase());
+
 function locationAllowed(loc) {
   const l = (loc || '').toLowerCase();
   if (!l) return { allowed: true, isRemote: false }; // not stated — keep, vet manually
   const isRemote = /\bremote\b|work from home|distributed|\banywhere\b/.test(l);
   if (isRemote) {
-    const nonUS = /(emea|europe|apac|latam|canada|\buk\b|united kingdom|australia|india|germany|japan|singapore|brazil|mexico|poland|philippines|south korea)/;
-    const usSignal = /(united states|\bus\b|\busa\b|north america|americas|worldwide|anywhere|global)/;
-    if (nonUS.test(l) && !usSignal.test(l)) return { allowed: false, isRemote: true };
+    if (REMOTE_EXCLUDE_RE.test(l) && !REMOTE_INCLUDE_RE.test(l)) return { allowed: false, isRemote: true };
     return { allowed: true, isRemote: true };
   }
-  const dcOrRichmond = /washington,?\s*d\.?c\.?|,\s*dc\b|richmond,?\s*(va\b|virginia)/;
-  return { allowed: dcOrRichmond.test(l), isRemote: false };
+  return { allowed: HYBRID_ONSITE_ALLOWED.some(needle => l.includes(needle)), isRemote: false };
 }
 
-const SYNONYMS = [
-  ['workflow orchestration', 'automation pipeline'],
-  ['low-code', 'no-code'],
-  ['process automation', 'workflow automation'],
-  ['internal tooling', 'internal tools'],
-  ['api integration', 'rest api'],
-  ['legacy systems', 'soap api'],
-  ['data warehouse', 'snowflake'],
-  ['ai agents', 'llm agents'],
-  ['generative ai', 'llm'],
-  ['customer onboarding', 'onboarding'],
-  ['technical implementation', 'implementation'],
-  ['revenue operations', 'revops'],
-  ['business systems', 'business operations'],
-  ['cross functional leadership', 'cross-functional'],
-];
-
 // =================================================================
-// 2. TARGET COMPANY LIST
-//    Grounded in your actual background: API-first B2B SaaS, proptech,
-//    fintech/crypto, and automation/dev-tools companies — the kind of
-//    place that has an unowned ops problem exactly like the one you solved
-//    at Propexo. ats = 'greenhouse' | 'ashby' | 'lever'.
-//    slug = the token in the company's public job board URL, e.g.
+// 2. TARGET COMPANY LIST — seeded from the active config's "companies"
+//    array the first time companies.csv is created for this DATA_DIR; after
+//    that, companies.csv is the source of truth (edit it by hand, or via
+//    --add-company / --careers-url / the Telegram bot) and this seed is
+//    ignored. ats = 'greenhouse' | 'ashby' | 'lever'; slug = the token in
+//    the company's public job board URL, e.g.
 //      https://job-boards.greenhouse.io/anthropic  -> slug: 'anthropic'
 //      https://jobs.ashbyhq.com/retool              -> slug: 'retool'
 //      https://jobs.lever.co/ramp                   -> slug: 'ramp'
-//    SOME SLUGS BELOW ARE BEST-GUESS AND NEED CONFIRMING — the script
-//    will just skip/report an error for any that don't resolve, so it's
-//    safe to run as-is and prune afterward.
 // =================================================================
-// All slugs below were VERIFIED LIVE on 2026-08-23 by probing the actual
-// board APIs (many companies had migrated Greenhouse -> Ashby).
-const TARGET_COMPANIES = [
-  // --- API-first / dev-tools / automation platforms (fits all 3 tracks) ---
-  { name: 'Merge',         ats: 'ashby',      slug: 'merge' },
-  { name: 'Workato',       ats: 'greenhouse', slug: 'workato' },
-  { name: 'Zapier',        ats: 'ashby',      slug: 'zapier' },
-  { name: 'Vanta',         ats: 'ashby',      slug: 'vanta' },
-  { name: 'Drata',         ats: 'ashby',      slug: 'drata' },
-  { name: 'Ironclad',      ats: 'ashby',      slug: 'ironcladhq' },
-  { name: 'Ramp',          ats: 'ashby',      slug: 'ramp' },
-  { name: 'Mercury',       ats: 'greenhouse', slug: 'mercury' },
-  { name: 'Anthropic',     ats: 'greenhouse', slug: 'anthropic' },
-  { name: 'Persona',       ats: 'ashby',      slug: 'persona' },
-  { name: 'Alloy',         ats: 'greenhouse', slug: 'alloy' },
-  { name: 'Middesk',       ats: 'ashby',      slug: 'middesk' },
-  { name: 'Codat',         ats: 'ashby',      slug: 'codat' },
-  { name: 'Finch',         ats: 'lever',      slug: 'finch' },
-
-  // --- Proptech (direct domain overlap with Propexo) ---
-  { name: 'Latch',         ats: 'lever',      slug: 'latch' },
-  { name: 'Second Nature', ats: 'ashby',      slug: 'second-nature' },
-  { name: 'Steadily',      ats: 'ashby',      slug: 'steadily' },
-  { name: 'PropHero',      ats: 'greenhouse', slug: 'prophero' },
-
-  // --- Fintech / crypto (direct domain overlap with Ledgible/Coinbase) ---
-  { name: 'Fireblocks',    ats: 'greenhouse', slug: 'fireblocks' },
-  { name: 'TaxBit',        ats: 'greenhouse', slug: 'taxbit' },
-  { name: 'Chainalysis',   ats: 'ashby',      slug: 'chainalysis-careers' },
-  { name: 'Gemini',        ats: 'greenhouse', slug: 'gemini' },
-
-  // --- General B2B SaaS w/ known lean-ops / automation-heavy culture ---
-  { name: 'Notion',        ats: 'ashby',      slug: 'notion' },
-  { name: 'Linear',        ats: 'ashby',      slug: 'linear' },
-  { name: 'Vercel',        ats: 'greenhouse', slug: 'vercel' },
-
-  // =============================================================
-  // EXPANSION (added 2026-08-23): every slug below was verified live
-  // against the actual board API — name-checked on Greenhouse, or a
-  // directly name-derived slug on Ashby/Lever with active postings.
-  // More verified-but-not-added companies: companies_backlog.json
-  // (add any with: node job_watch.js --add-company="Name")
-  // =============================================================
-
-  // --- Fintech infrastructure / payments (SE + TPM fit) ---
-  { name: 'Stripe',          ats: 'greenhouse', slug: 'stripe' },
-  { name: 'Brex',            ats: 'greenhouse', slug: 'brex' },
-  { name: 'Airwallex',       ats: 'ashby',      slug: 'airwallex' },
-  { name: 'Bill.com',        ats: 'greenhouse', slug: 'billcom' },
-  { name: 'Melio',           ats: 'greenhouse', slug: 'melio' },
-  { name: 'Modern Treasury', ats: 'ashby',      slug: 'moderntreasury' },
-  { name: 'Anrok',           ats: 'ashby',      slug: 'anrok' },
-  { name: 'Sardine',         ats: 'ashby',      slug: 'sardine' },
-  { name: 'Socure',          ats: 'ashby',      slug: 'socure' },
-  { name: 'Lithic',          ats: 'greenhouse', slug: 'lithic' },
-  { name: 'Prove',           ats: 'greenhouse', slug: 'prove' },
-
-  // --- Dev/API platforms ---
-  { name: 'Twilio',          ats: 'greenhouse', slug: 'twilio' },
-  { name: 'Postman',         ats: 'greenhouse', slug: 'postman' },
-  { name: 'Kong',            ats: 'ashby',      slug: 'kong' },
-  { name: 'WorkOS',          ats: 'ashby',      slug: 'workos' },
-  { name: 'Nylas',           ats: 'ashby',      slug: 'nylas' },
-
-  // --- Crypto (Ledgible/Coinbase domain overlap) ---
-  { name: 'Coinbase',        ats: 'greenhouse', slug: 'coinbase' },
-  { name: 'Ripple',          ats: 'greenhouse', slug: 'ripple' },
-  { name: 'Uniswap Labs',    ats: 'ashby',      slug: 'uniswap' },
-  { name: 'Alchemy',         ats: 'ashby',      slug: 'alchemy' },
-  { name: 'BitGo',           ats: 'greenhouse', slug: 'bitgo' },
-  { name: 'MoonPay',         ats: 'lever',      slug: 'moonpay' },
-
-  // --- Data / dev infrastructure ---
-  { name: 'Fivetran',        ats: 'greenhouse', slug: 'fivetran' },
-  { name: 'Hightouch',       ats: 'greenhouse', slug: 'hightouch' },
-  { name: 'Amplitude',       ats: 'greenhouse', slug: 'amplitude' },
-  { name: 'Mixpanel',        ats: 'greenhouse', slug: 'mixpanel' },
-  { name: 'LaunchDarkly',    ats: 'greenhouse', slug: 'launchdarkly' },
-  { name: 'Temporal',        ats: 'ashby',      slug: 'temporal' },
-  { name: 'Supabase',        ats: 'ashby',      slug: 'supabase' },
-  { name: 'Sentry',          ats: 'ashby',      slug: 'sentry' },
-  { name: 'PagerDuty',       ats: 'greenhouse', slug: 'pagerduty' },
-  { name: 'GitLab',          ats: 'greenhouse', slug: 'gitlab' },
-  { name: 'Tailscale',       ats: 'greenhouse', slug: 'tailscale' },
-
-  // --- AI ---
-  { name: 'Scale AI',        ats: 'greenhouse', slug: 'scaleai' },
-  { name: 'Cohere',          ats: 'ashby',      slug: 'cohere' },
-  { name: 'Together AI',     ats: 'greenhouse', slug: 'togetherai' },
-  { name: 'Baseten',         ats: 'ashby',      slug: 'baseten' },
-  { name: 'LangChain',       ats: 'ashby',      slug: 'langchain' },
-  { name: 'Perplexity',      ats: 'ashby',      slug: 'perplexity' },
-  { name: 'Harvey',          ats: 'ashby',      slug: 'harvey' },
-  { name: 'Sierra',          ats: 'ashby',      slug: 'sierra' },
-  { name: 'Decagon',         ats: 'ashby',      slug: 'decagon' },
-
-  // --- Compliance / security SaaS (Vanta/Drata adjacent) ---
-  { name: 'Secureframe',     ats: 'lever',      slug: 'secureframe' },
-  { name: 'Hyperproof',      ats: 'greenhouse', slug: 'hyperproof' },
-  { name: 'OneTrust',        ats: 'greenhouse', slug: 'onetrust' },
-  { name: 'Abnormal Security', ats: 'greenhouse', slug: 'abnormalsecurity' },
-
-  // --- HR / payroll / hiring tech ---
-  { name: 'Gusto',           ats: 'greenhouse', slug: 'gusto' },
-  { name: 'Justworks',       ats: 'greenhouse', slug: 'justworks' },
-  { name: 'Checkr',          ats: 'greenhouse', slug: 'checkr' },
-  { name: 'Greenhouse',      ats: 'greenhouse', slug: 'greenhouse' },
-  { name: 'Ashby',           ats: 'ashby',      slug: 'ashby' },
-
-  // --- CS / support / sales tooling (your CS + SE tracks sell these) ---
-  { name: 'Help Scout',      ats: 'ashby',      slug: 'helpscout' },
-  { name: 'Gorgias',         ats: 'ashby',      slug: 'gorgias' },
-  { name: 'Aircall',         ats: 'lever',      slug: 'aircall' },
-  { name: 'Dialpad',         ats: 'greenhouse', slug: 'dialpad' },
-  { name: 'Pylon',           ats: 'ashby',      slug: 'pylon' },
-  { name: 'Outreach',        ats: 'lever',      slug: 'outreach' },
-  { name: 'Salesloft',       ats: 'greenhouse', slug: 'salesloft' },
-  { name: 'Apollo.io',       ats: 'greenhouse', slug: 'apolloio' },
-
-  // --- Proptech / real estate ---
-  { name: 'VTS',             ats: 'greenhouse', slug: 'vts' },
-  { name: 'Crexi',           ats: 'greenhouse', slug: 'crexi' },
-  { name: 'Blend',           ats: 'greenhouse', slug: 'blend' },
-  { name: 'Qualia',          ats: 'greenhouse', slug: 'qualia' },
-  { name: 'Roofstock',       ats: 'greenhouse', slug: 'roofstock' },
-  { name: 'EliseAI',         ats: 'ashby',      slug: 'eliseai' },
-  { name: 'SmartRent',       ats: 'greenhouse', slug: 'smartrent' },
-  { name: 'ButterflyMX',     ats: 'ashby',      slug: 'butterflymx' },
-
-  // --- General B2B SaaS ---
-  { name: 'Figma',           ats: 'greenhouse', slug: 'figma' },
-  { name: 'Airtable',        ats: 'greenhouse', slug: 'airtable' },
-  { name: 'Webflow',         ats: 'greenhouse', slug: 'webflow' },
-  { name: 'Asana',           ats: 'greenhouse', slug: 'asana' },
-  { name: 'Klaviyo',         ats: 'greenhouse', slug: 'klaviyo' },
-  { name: 'Braze',           ats: 'greenhouse', slug: 'braze' },
-
-  // REMOVED (probed 2026-08-23, no public Greenhouse/Ashby/Lever board — they
-  // run in-house or unsupported ATSs, so this script can't poll them):
-  //   Retool, Rippling, Deel (Ashby board exists but 0 postings), AppFolio,
-  //   Funnel Leasing, DoorLoop, Rentable, Cotality, Circle, Anchorage Digital,
-  //   Bitwave, Clay
-  // If any migrate to a supported ATS later, re-add with:
-  //   node job_watch.js --add-company="<Name>"
-];
+const TARGET_COMPANIES = CONFIG.companies || [];
 
 // =================================================================
 // 2b. COMPANY LIST CSV — companies.csv, next to this script, is the
@@ -1001,18 +861,8 @@ async function discoverJobs(errors) {
   return [...byUrl.values()];
 }
 
-// =================================================================
-// CSV LEDGER — job_watch_log.csv is both the log AND the dedup store:
-// a job has "already been alerted" iff it's in the CSV. Rows are appended
-// the moment a Telegram alert is successfully sent, so separate processes
-// (cron runs, --watch, /scan from the bot) all share one source of truth.
-// =================================================================
-const CSV_PATH = path.join(DATA_DIR, 'job_watch_log.csv');
-const CSV_HEADER = 'RunID,RunTimestamp,Company,Title,Track,Match%,Salary,Location,PostedOrUpdated,URL\n';
-
-const comboKey = r => `${normName(r.companyDisplay)}|${normName(r.title)}`;
-
-// Minimal parser for our own CSV format (quoted fields, "" escapes).
+// Minimal parser for our own CSV format (quoted fields, "" escapes) —
+// used by companies.csv.
 function parseCsvLine(line) {
   const fields = [];
   let cur = '', inQ = false;
@@ -1031,104 +881,50 @@ function parseCsvLine(line) {
   return fields;
 }
 
-// Reads the ledger (and any archived _old.csv) into URL + company|title sets.
-// Column positions are looked up from each file's own header, so older CSV
-// layouts still count toward dedup.
-function loadAlertedFromCsv() {
-  const urls = new Set();
-  const combos = new Set();
-  for (const file of [CSV_PATH, CSV_PATH.replace(/\.csv$/, '_old.csv')]) {
-    let lines;
-    try { lines = fs.readFileSync(file, 'utf8').split('\n'); }
-    catch { continue; } // file doesn't exist yet
-    const header = parseCsvLine(lines[0]);
-    const iUrl = header.indexOf('URL');
-    const iCompany = header.indexOf('Company');
-    const iTitle = header.indexOf('Title');
-    for (const line of lines.slice(1)) {
-      if (!line.trim()) continue;
-      const f = parseCsvLine(line);
-      if (iUrl >= 0 && f[iUrl]) urls.add(f[iUrl]);
-      if (iCompany >= 0 && iTitle >= 0 && f[iCompany] && f[iTitle]) {
-        combos.add(`${normName(f[iCompany])}|${normName(f[iTitle])}`);
-      }
-    }
-  }
-  return { urls, combos };
-}
-
-// Run at the start of every scan: drop ledger rows for jobs older than the
-// freshness window. A row survives if EITHER its posting date OR its alert
-// time is still inside the window — pruning purely on posting date could
-// re-alert a job whose ATS timestamp gets bumped after an edit, so recently
-// alerted rows are kept until they age out too. Unparseable dates are kept.
-function pruneCsvLedger(maxAgeDays) {
-  let lines;
-  try { lines = fs.readFileSync(CSV_PATH, 'utf8').split('\n'); }
-  catch { return 0; } // no ledger yet
-  if (lines[0] + '\n' !== CSV_HEADER) return 0; // unknown format — leave it alone
-  const header = parseCsvLine(lines[0]);
-  const iRun = header.indexOf('RunTimestamp');
-  const iPosted = header.indexOf('PostedOrUpdated');
-  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
-  const isFresh = (v) => {
-    const t = new Date(v).getTime();
-    return !Number.isFinite(t) || t >= cutoff;
-  };
-  const kept = [];
-  let pruned = 0;
-  for (const line of lines.slice(1)) {
-    if (!line.trim()) continue;
-    const f = parseCsvLine(line);
-    if (isFresh(f[iPosted]) || isFresh(f[iRun])) kept.push(line);
-    else pruned++;
-  }
-  if (pruned) {
-    fs.writeFileSync(CSV_PATH, CSV_HEADER + kept.join('\n') + (kept.length ? '\n' : ''));
-  }
-  return pruned;
-}
-
-function ensureCsvReady() {
-  if (fs.existsSync(CSV_PATH)) {
-    const firstLine = fs.readFileSync(CSV_PATH, 'utf8').split('\n')[0] + '\n';
-    // Archive an older-format file rather than appending misaligned rows.
-    if (firstLine !== CSV_HEADER) fs.renameSync(CSV_PATH, CSV_PATH.replace(/\.csv$/, '_old.csv'));
-  }
-  if (!fs.existsSync(CSV_PATH)) fs.writeFileSync(CSV_PATH, CSV_HEADER);
-}
-
-function appendCsvRow(run, r) {
-  ensureCsvReady();
-  const row = [run.id, run.timestamp, r.companyDisplay, r.title, r.track, r.matchPct, r.salary, r.location, r.postedOrUpdated, r.url]
-    .map(v => `"${String(v).replace(/"/g, '""')}"`).join(',');
-  fs.appendFileSync(CSV_PATH, row + '\n');
-}
-
 // =================================================================
-// RUN IDs — every scan gets a sequential id (persisted across processes)
-// and a timestamp, stamped on terminal output, CSV rows, and Telegram
-// alerts so you can always tell which run surfaced a job.
+// DEDUP CURSOR — last_scan.json holds a single timestamp: the start of the
+// last run that actually sent Telegram alerts. A job counts as "new" if its
+// ATS-reported posted/updated timestamp is after that cursor (or the cursor
+// doesn't exist yet, e.g. the very first run for this profile) — no per-job
+// ledger, nothing to prune. The cursor only advances on a real (non
+// --no-telegram) run, so a misconfigured/disabled Telegram doesn't cause
+// jobs to be silently skipped once it's fixed.
+//
+// Trade-off worth knowing: a job posted before the cursor that this profile
+// is only NOW able to see for the first time (e.g. a company just added via
+// --add-company, or a one-off send failure) won't be flagged as new, since
+// dedup is purely date-based rather than "have we ever alerted this exact
+// posting." That's the intentional simplification here — no per-job history
+// is kept at all.
 // =================================================================
-const RUN_COUNTER_PATH = path.join(DATA_DIR, 'run_counter.json');
+const LAST_SCAN_PATH = path.join(DATA_DIR, 'last_scan.json');
 
-function nextRunId() {
-  let last = 0;
-  try { last = JSON.parse(fs.readFileSync(RUN_COUNTER_PATH, 'utf8')).last || 0; }
-  catch { /* first run */ }
-  const id = last + 1;
-  fs.writeFileSync(RUN_COUNTER_PATH, JSON.stringify({ last: id }));
-  return id;
+function loadLastScanAt() {
+  try { return JSON.parse(fs.readFileSync(LAST_SCAN_PATH, 'utf8')).lastScanAt || null; }
+  catch { return null; } // first run for this profile
+}
+
+function saveLastScanAt(iso) {
+  fs.writeFileSync(LAST_SCAN_PATH, JSON.stringify({ lastScanAt: iso }));
+}
+
+// A job is "new" if its own posted/updated timestamp is unparseable (kept,
+// same conservative call the old ledger pruning made) or falls after cutoff.
+function isNewSinceCursor(postedOrUpdated, cutoffIso) {
+  if (!cutoffIso) return true; // no prior scan for this profile — everything counts as new
+  const t = new Date(postedOrUpdated).getTime();
+  if (!Number.isFinite(t)) return true;
+  return t > new Date(cutoffIso).getTime();
 }
 
 // =================================================================
 // TELEGRAM
 // =================================================================
 async function sendTelegramMessage(text) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+  const token = process.env[CONFIG.telegram.botTokenEnv];
+  const chatId = process.env[CONFIG.telegram.chatIdEnv];
   if (!token || !chatId) {
-    console.error('[Telegram] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — skipping alert. See header comment for setup.');
+    console.error(`[Telegram] ${CONFIG.telegram.botTokenEnv} / ${CONFIG.telegram.chatIdEnv} not set — skipping alert. See header comment for setup.`);
     return false;
   }
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
@@ -1162,7 +958,7 @@ function formatTelegramMessage(job, run) {
     : '';
   const sourceTag = job.source ? ` (via ${job.source} discovery)` : '';
   const locTag = job.isRemote ? '🏠 Remote' : '🏢 Hybrid';
-  const runLine = run ? `\n<i>Run #${run.id} · ${escapeHtml(run.timestampLocal)}</i>` : '';
+  const runLine = run ? `\n<i>${escapeHtml(run.timestampLocal)}</i>` : '';
   return (
     `<b>${escapeHtml(job.companyDisplay)}</b> — ${escapeHtml(job.title)} [${locTag}]${sourceTag}\n` +
     `Track: ${escapeHtml(job.track)}\n` +
@@ -1173,160 +969,6 @@ function formatTelegramMessage(job, run) {
 
 function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// =================================================================
-// TELEGRAM COMMAND BOT
-// Long-polls getUpdates so you can manage the company list from your
-// phone: "/add Plaid" -> resolves the ATS board and replies immediately.
-// Runs inside --watch (if Telegram is configured) or standalone via --bot.
-// =================================================================
-const TG_OFFSET_PATH = path.join(DATA_DIR, 'telegram_offset.json');
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-function loadTgOffset() {
-  try { return JSON.parse(fs.readFileSync(TG_OFFSET_PATH, 'utf8')).offset || 0; }
-  catch { return 0; }
-}
-function saveTgOffset(offset) {
-  fs.writeFileSync(TG_OFFSET_PATH, JSON.stringify({ offset }));
-}
-
-function removeExtraCompany(name) {
-  const all = getAllCompanies();
-  const idx = all.findIndex(c => normName(c.name) === normName(name));
-  if (idx === -1) return null;
-  const removed = all[idx];
-  const rest = all.filter((_, i) => i !== idx);
-  fs.writeFileSync(COMPANIES_CSV_PATH,
-    COMPANIES_CSV_HEADER + rest.map(companyCsvRow).join('\n') + (rest.length ? '\n' : ''));
-  return removed;
-}
-
-const BOT_HELP =
-  '<b>Commands</b>\n' +
-  '/add Plaid — find &amp; track a company\'s job board\n' +
-  '/add Name | ats | slug — force a specific board\n' +
-  '/addpage Name | https://... — scrape a company\'s own careers page (no supported ATS needed)\n' +
-  '/remove Name — stop tracking a company\n' +
-  '/list — show tracked companies\n' +
-  '/scan — run a scan right now\n' +
-  '/help — this list';
-
-async function handleTelegramCommand(text, triggerScan) {
-  const t = text.trim();
-
-  if (/^\/(start|help)\b/i.test(t)) return BOT_HELP;
-
-  const add = t.match(/^\/add\s+(.+)$/is);
-  if (add) {
-    const parts = add[1].split('|').map(s => s.trim()).filter(Boolean);
-    const name = parts[0];
-
-    // Forced form: /add Name | ats | slug
-    if (parts.length >= 3) {
-      const ats = parts[1].toLowerCase();
-      const slug = parts[2];
-      const probe = PROBES[ats];
-      if (!probe) return `Unknown ATS "${escapeHtml(parts[1])}" — use greenhouse, ashby or lever.`;
-      const hit = await probe(slug).catch(() => null);
-      if (!hit) return `❌ No live ${escapeHtml(ats)} board at slug "${escapeHtml(slug)}".`;
-      return saveExtraCompany({ name, ats: hit.ats, slug: hit.slug, via: 'telegram' })
-        ? `✅ Added <b>${escapeHtml(name)}</b>: ${escapeHtml(describeHit(hit))}\nNow tracking ${getAllCompanies().length} companies.`
-        : `${escapeHtml(name)} (${hit.ats}/${hit.slug}) is already tracked.`;
-    }
-
-    const hits = await resolveCompany(name);
-    if (!hits.length) {
-      return `❌ No live Greenhouse/Ashby/Lever board found for "${escapeHtml(name)}".\n` +
-        `If you know the board, force it:\n/add ${escapeHtml(name)} | ats | slug\n` +
-        `Or, if they have their own careers page, send me its URL and I'll scrape it directly:\n` +
-        `/addpage ${escapeHtml(name)} | https://...`;
-    }
-    const best = hits[0];
-    if (best.nameVerified === false) {
-      return `⚠️ Found board(s) for "${escapeHtml(name)}" but the name doesn't match — not adding automatically:\n` +
-        hits.map(h => `• ${escapeHtml(describeHit(h))}`).join('\n') +
-        `\nIf one is right: /add ${escapeHtml(name)} | ats | slug`;
-    }
-    let reply = saveExtraCompany({ name, ats: best.ats, slug: best.slug, via: 'telegram' })
-      ? `✅ Added <b>${escapeHtml(name)}</b>: ${escapeHtml(describeHit(best))}\nNow tracking ${getAllCompanies().length} companies — included from the next scan.`
-      : `${escapeHtml(name)} (${best.ats}/${best.slug}) is already tracked.`;
-    for (const alt of hits.slice(1)) reply += `\n(also found: ${escapeHtml(describeHit(alt))})`;
-    return reply;
-  }
-
-  const ap = t.match(/^\/addpage\s+(.+)$/is);
-  if (ap) {
-    const parts = ap[1].split('|').map(s => s.trim()).filter(Boolean);
-    if (parts.length < 2) return 'Usage: /addpage Company Name | https://their-careers-page';
-    const { ok, message } = await addCustomCompany(parts[0], parts[1]);
-    return `${ok ? '✅' : '❌'} ${escapeHtml(message)}${ok ? `\nNow tracking ${getAllCompanies().length} companies.` : ''}`;
-  }
-
-  const rm = t.match(/^\/remove\s+(.+)$/is);
-  if (rm) {
-    const name = rm[1].trim();
-    const removed = removeExtraCompany(name);
-    return removed
-      ? `🗑 Removed <b>${escapeHtml(removed.name)}</b> (${removed.ats === 'custom' ? removed.url : `${removed.ats}/${removed.slug}`}). Tracking ${getAllCompanies().length} companies.`
-      : `Not tracking anything called "${escapeHtml(name)}".`;
-  }
-
-  if (/^\/list\b/i.test(t)) {
-    const companies = getAllCompanies();
-    return `<b>Tracking ${companies.length} companies</b>\n` +
-      companies.map(c => `${escapeHtml(c.name)} (${c.ats})`).join(', ');
-  }
-
-  if (/^\/scan\b/i.test(t)) {
-    if (!triggerScan) return 'No scanner attached in this mode.';
-    triggerScan(); // fire and forget — results arrive as normal job alerts
-    return '🔍 Scanning now — any new matches will arrive as separate alerts.';
-  }
-
-  if (t.startsWith('/')) return `Unknown command.\n\n${BOT_HELP}`;
-  return null; // ignore plain (non-command) messages
-}
-
-async function telegramCommandLoop(triggerScan) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) {
-    console.error('[Telegram bot] TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — command bot disabled.');
-    return;
-  }
-  console.log('[Telegram bot] Listening for commands (/help for the list).');
-  let offset = loadTgOffset();
-  while (true) {
-    try {
-      const res = await fetch(
-        `https://api.telegram.org/bot${token}/getUpdates?timeout=25&offset=${offset + 1}&allowed_updates=%5B%22message%22%5D`
-      );
-      if (res.status === 409) {
-        console.error('[Telegram bot] Another process is already polling this bot (409) — stopping this listener.');
-        return;
-      }
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.description || `HTTP ${res.status}`);
-      for (const update of data.result || []) {
-        offset = Math.max(offset, update.update_id);
-        saveTgOffset(offset);
-        const msg = update.message;
-        // Only obey your own chat — anyone can message a bot.
-        if (!msg || !msg.text || String(msg.chat?.id) !== String(chatId)) continue;
-        try {
-          const reply = await handleTelegramCommand(msg.text, triggerScan);
-          if (reply) await sendTelegramMessage(reply);
-        } catch (err) {
-          await sendTelegramMessage(`Error: ${escapeHtml(err.message)}`);
-        }
-      }
-    } catch (err) {
-      console.error(`[Telegram bot] poll error: ${err.message} — retrying in 5s`);
-      await sleep(5000);
-    }
-  }
 }
 
 // =================================================================
@@ -1429,6 +1071,16 @@ async function scanAll(opts = {}) {
 
     const { allowed, isRemote } = locationAllowed(job.location);
     if (!allowed) {
+      droppedForLocation++;
+      stat.badLocation++;
+      return;
+    }
+
+    // Titles sometimes carry the region even when the location field doesn't
+    // ("Enterprise AE, LATAM", "Solutions Engineer - EMEA", a role scoped to
+    // "APAC"): apply the same excluded-region check to the title as to
+    // location, using this config's remoteExcludePattern/remoteIncludePattern.
+    if (REMOTE_EXCLUDE_RE.test(titleLower) && !REMOTE_INCLUDE_RE.test(titleLower)) {
       droppedForLocation++;
       stat.badLocation++;
       return;
@@ -1546,7 +1198,7 @@ function printFeedStats(feedStats) {
 }
 
 function printTable(results, meta) {
-  console.log(`\nFound ${results.length} matching roles (min salary floor: $${meta.minSalary.toLocaleString()}, max age: ${meta.maxAgeDays}d, remote or DC/Richmond hybrid only):\n`);
+  console.log(`\nFound ${results.length} matching roles (min salary floor: $${meta.minSalary.toLocaleString()}, max age: ${meta.maxAgeDays}d, remote-in-region or approved hybrid/onsite cities only — see this config's "location"):\n`);
   if (meta.droppedForSalary) {
     console.log(`(Filtered out ${meta.droppedForSalary} posting(s) below the floor.)`);
   }
@@ -1554,7 +1206,7 @@ function printTable(results, meta) {
     console.log(`(Filtered out ${meta.droppedForAge} posting(s) older than ${meta.maxAgeDays} days.)`);
   }
   if (meta.droppedForLocation) {
-    console.log(`(Filtered out ${meta.droppedForLocation} posting(s) outside remote / Washington DC / Richmond VA.)`);
+    console.log(`(Filtered out ${meta.droppedForLocation} posting(s) outside this config's allowed remote region / hybrid-onsite cities.)`);
   }
   if (meta.droppedForExcludedTitle) {
     console.log(`(Filtered out ${meta.droppedForExcludedTitle} posting(s) with excluded title terms, e.g. marketing.)`);
@@ -1696,7 +1348,7 @@ async function autoAddDiscoveredCompanies(newJobs, minMatch) {
   saveResolveCache(cache);
   if (added.length) {
     // stderr so --json stdout stays parseable
-    console.error(`[Auto-add] Now tracking directly: ${added.join(', ')} — saved to companies_extra.json.`);
+    console.error(`[Auto-add] Now tracking directly: ${added.join(', ')} — saved to companies.csv.`);
   }
 }
 
@@ -1707,7 +1359,6 @@ async function main() {
   const noTelegram = args.includes('--no-telegram');
   const discover = args.includes('--discover');
   const noAutoAdd = args.includes('--no-autoadd');
-  const botOnly = args.includes('--bot');
   if (args.includes('--quiet')) API_LOG_ENABLED = false;
   const watchArg = args.find(a => a.startsWith('--watch='));
   const minSalaryArg = args.find(a => a.startsWith('--min-salary='));
@@ -1739,22 +1390,17 @@ async function main() {
   const scanOpts = { jsonOut, strict, noTelegram, discover, noAutoAdd, minSalary, minMatch, maxAgeDays };
   const runOnce = () => performScan(scanOpts);
 
-  // Never let a /scan command and the interval timer scan simultaneously.
-  let scanning = false;
-  const safeScan = async () => {
-    if (scanning) return;
-    scanning = true;
-    try { await runOnce(); } finally { scanning = false; }
-  };
-
-  if (botOnly) {
-    console.log('Bot-only mode: no scheduled scans (pair this with cron, or use /scan).');
-    await telegramCommandLoop(safeScan);
-  } else if (watchArg) {
+  if (watchArg) {
     const intervalSec = parseInt(watchArg.split('=')[1], 10) || 1800;
     console.log(`Watching ${getAllCompanies().length} companies every ${intervalSec}s${discover ? ' + open discovery (Remotive, The Muse)' : ''}. Ctrl+C to stop.`);
-    if (!noTelegram) telegramCommandLoop(safeScan); // runs alongside the scan interval
-    await safeScan(); // first run only alerts on jobs not already in the CSV ledger
+    // Never let two scans overlap if one run takes longer than intervalSec.
+    let scanning = false;
+    const safeScan = async () => {
+      if (scanning) return;
+      scanning = true;
+      try { await runOnce(); } finally { scanning = false; }
+    };
+    await safeScan(); // first run only alerts on jobs posted since the last scan cursor
     setInterval(safeScan, intervalSec * 1000);
   } else {
     await runOnce();
@@ -1776,77 +1422,74 @@ async function performScan(opts = {}) {
   } = opts;
   {
     const run = {
-      id: nextRunId(),
       timestamp: new Date().toISOString(),
       timestampLocal: new Date().toLocaleString()
     };
     const statsBefore = { ...apiStats };
-    apiLog(`── run #${run.id} starting ──`);
+    apiLog(`── scan starting (${run.timestampLocal}) ──`);
     const { results, errors, feedStats, droppedForSalary, unlistedSalaryCount,
             droppedForAge, droppedForLocation, droppedForExcludedTitle } =
       await scanAll({ minSalary, strict, discover, maxAgeDays });
-    apiLog(`── run #${run.id} scan done: ${apiStats.total - statsBefore.total} requests, ${apiStats.failed - statsBefore.failed} failed ──`);
+    apiLog(`── scan done: ${apiStats.total - statsBefore.total} requests, ${apiStats.failed - statsBefore.failed} failed ──`);
     if (errors.length) {
       console.error(`\n[${errors.length} feed(s) failed — check slugs]`);
       errors.forEach(e => console.error('  ' + e));
     }
 
-    // Age out ledger rows past the freshness window before reading it.
-    const prunedRows = pruneCsvLedger(maxAgeDays);
-    if (prunedRows) console.log(`[ledger] Pruned ${prunedRows} row(s) older than ${maxAgeDays} day(s) from job_watch_log.csv.`);
-
-    // The CSV is the dedup ledger: a job counts as already-alerted if its
-    // URL — or its company+title combo, which catches the same role under an
-    // aggregator link vs the canonical ATS link — is already in the file.
-    const alerted = loadAlertedFromCsv();
-    const notYetAlerted = results.filter(r =>
-      !alerted.urls.has(r.url) && !alerted.combos.has(comboKey(r))
-    );
+    // Dedup cursor: a job is "new" if the ATS reports it posted/updated after
+    // the last run that actually sent Telegram alerts. See LAST_SCAN_PATH.
+    const cutoffIso = loadLastScanAt();
+    const newSinceLastScan = results.filter(r => isNewSinceCursor(r.postedOrUpdated, cutoffIso));
 
     // Promising discovered companies -> resolve their ATS board and track
     // them directly from the next scan onward.
     if (discover && !noAutoAdd) {
-      await autoAddDiscoveredCompanies(notYetAlerted, minMatch);
+      await autoAddDiscoveredCompanies(newSinceLastScan, minMatch);
     }
 
     if (jsonOut) {
       console.log(JSON.stringify({
-        runId: run.id, runTimestamp: run.timestamp, minSalary, minMatch,
+        runTimestamp: run.timestamp, lastScanAt: cutoffIso, minSalary, minMatch,
         feedStats,
         currentJobs: results,
-        notYetAlertedUrls: notYetAlerted.map(j => j.url)
+        newSinceLastScanUrls: newSinceLastScan.map(j => j.url)
       }, null, 2));
     } else {
-      console.log(`\n=== Run #${run.id} · ${run.timestampLocal} ===`);
+      console.log(`\n=== Scan · ${run.timestampLocal} ===`);
       printFeedStats(feedStats);
-      // ALL currently matching jobs, every run — dedup only gates Telegram.
+      // ALL currently matching jobs, every run — the cursor only gates Telegram.
       printTable(results, { minSalary, strict, maxAgeDays, droppedForSalary, unlistedSalaryCount, droppedForAge, droppedForLocation, droppedForExcludedTitle });
-      console.log(`${notYetAlerted.length} of ${results.length} not yet in the CSV ledger.`);
+      console.log(`${newSinceLastScan.length} of ${results.length} posted/updated since the last scan` +
+        (cutoffIso ? ` (${cutoffIso}).` : ' (first scan for this profile).'));
     }
 
-    // Telegram: send only what's NOT already in the CSV, and append each
-    // successfully sent alert to the CSV in the same moment. A failed send
-    // is deliberately not recorded, so it retries next run.
-    if (!noTelegram) {
-      const toSend = notYetAlerted.filter(j => j.matchPct >= minMatch);
+    // Telegram: send only what's new since the cursor. The cursor only
+    // advances on a run where Telegram is actually configured and enabled —
+    // a disabled (--no-telegram) or misconfigured (missing token/chat id)
+    // Telegram leaves it in place, so nothing is silently skipped once it's
+    // fixed. An individual send failure (network blip, rate limit) with
+    // credentials otherwise present does NOT hold the cursor back — that
+    // job just won't be retried, the trade-off documented at LAST_SCAN_PATH.
+    // These status lines go to stderr in --json mode so stdout stays pure JSON.
+    const statusLog = jsonOut ? console.error : console.log;
+    const telegramConfigured = !!(process.env[CONFIG.telegram.botTokenEnv] && process.env[CONFIG.telegram.chatIdEnv]);
+    if (!noTelegram && telegramConfigured) {
+      const toSend = newSinceLastScan.filter(j => j.matchPct >= minMatch);
       let sent = 0;
       for (const job of toSend) {
         const ok = await sendTelegramMessage(formatTelegramMessage(job, run));
-        if (ok) {
-          appendCsvRow(run, job);
-          alerted.urls.add(job.url);
-          alerted.combos.add(comboKey(job));
-          sent++;
-        }
+        if (ok) sent++;
       }
       if (toSend.length) {
-        console.log(`[Telegram] Sent ${sent}/${toSend.length} alert(s) at/above ${minMatch}% match — each recorded in the CSV.`);
+        statusLog(`[Telegram] Sent ${sent}/${toSend.length} alert(s) at/above ${minMatch}% match.`);
       }
       // No heartbeat by design: Telegram receives ONLY job alerts. A quiet
       // scan is visible in the terminal/GitHub Actions run logs instead.
-      console.log(`Funnel: ${results.length} passed filters -> ${notYetAlerted.length} not yet in CSV -> ${toSend.length} at/above ${minMatch}% match -> ${sent} sent to Telegram & saved to CSV.`);
-    } else if (notYetAlerted.length) {
-      console.log(`[--no-telegram] Nothing recorded to the CSV — these will alert on the next Telegram-enabled run.`);
+      statusLog(`Funnel: ${results.length} passed filters -> ${newSinceLastScan.length} new since last scan -> ${toSend.length} at/above ${minMatch}% match -> ${sent} sent to Telegram.`);
+      saveLastScanAt(run.timestamp);
+    } else if (newSinceLastScan.length) {
+      const why = noTelegram ? '--no-telegram passed' : `${CONFIG.telegram.botTokenEnv}/${CONFIG.telegram.chatIdEnv} not set`;
+      statusLog(`[Telegram disabled: ${why}] Scan cursor not advanced — these will still look new on the next Telegram-enabled run.`);
     }
   }
 }
