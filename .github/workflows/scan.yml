@@ -32,22 +32,26 @@ jobs:
       # Runs configs/default/config.json, whose telegram.botTokenEnv/chatIdEnv
       # name TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (see that file). This is a
       # one-shot notifier — it only sends Telegram messages, there's no
-      # process left running to receive replies. Adding a second, independent
-      # search: mkdir configs/<name>, copy configs/default/config.json into
-      # it and edit it (give it its own telegram.botTokenEnv/chatIdEnv names),
-      # add a matching pair of repo secrets, and add another "Run scan" step
-      # below (or a matrix) with --config=<name> and that config's env vars.
+      # process left running to receive replies. --discover is always on here
+      # so every scheduled run also covers the open aggregator pass (Remotive,
+      # The Muse) surfacing companies not on the direct list, auto-adding any
+      # good match to companies.csv going forward (see slug_cache.json). Adding
+      # a second, independent search: mkdir configs/<name>, copy
+      # configs/default/config.json into it and edit it (give it its own
+      # telegram.botTokenEnv/chatIdEnv names), add a matching pair of repo
+      # secrets, and add another "Run scan" step below (or a matrix) with
+      # --config=<name> and that config's env vars.
       - name: Run scan (default)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node job_watch.js --config=default --quiet
+        run: node job_watch.js --config=default --discover --quiet
 
       - name: Commit updated state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add configs/default/last_scan.json configs/default/slug_cache.json
+          git add configs/default/last_scan.json configs/default/slug_cache.json configs/default/companies.csv
           if git diff --cached --quiet; then
             echo "No state changes to commit."
           else
