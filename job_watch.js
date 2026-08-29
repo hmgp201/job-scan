@@ -58,10 +58,10 @@
  *          with client-side JS can't be scraped this way — the add command
  *          tests the page and tells you what it found before saving.
  *
- *   THE COMPANY LIST LIVES IN <profile folder>/companies.csv (created on
- *   first run, seeded from the active config's "companies" array; legacy
- *   companies_extra.json is auto-migrated). Columns: Name,ATS,Slug,URL,
- *   AddedAt,Via — edit it by hand freely. ATS is greenhouse|ashby|lever
+ *   THE COMPANY LIST LIVES ONLY IN <profile folder>/companies.csv — created
+ *   empty (header-only) on first run for a new profile; populate it with
+ *   --add-company / --careers-url / hand-editing. Columns: Name,ATS,Slug,
+ *   URL,AddedAt,Via — edit it by hand freely. ATS is greenhouse|ashby|lever
  *   (uses Slug) or custom (uses URL).
  *
  *   NOTE: this is a one-way notifier, not a chat bot — it only SENDS
@@ -138,13 +138,13 @@ const path = require('path');
 // =================================================================
 // CONFIG FILE / PROFILE FOLDER — a "profile" is one self-contained folder
 // under configs/ holding config.json (everything that makes one search
-// distinct: CV tracks, company list seed, salary/match/age thresholds,
-// location policy, and which Telegram bot/chat the alerts go to) PLUS every
-// state file that config generates (companies.csv, last_scan.json,
-// slug_cache.json, companies_backlog.json). Anything that's the same for
-// every profile (this script, .env, package.json, the
-// GitHub Actions workflow) stays at the repo root, not duplicated per
-// profile — only what's unique to a search lives in its folder.
+// distinct: CV tracks, salary/match/age thresholds, location policy, and
+// which Telegram bot/chat the alerts go to — deliberately NOT the company
+// list, see COMPANY LIST below) PLUS every state file that config generates
+// (companies.csv, last_scan.json, slug_cache.json). Anything that's the
+// same for every profile (this script, .env, package.json, the GitHub
+// Actions workflow) stays at the repo root, not duplicated per profile —
+// only what's unique to a search lives in its folder.
 //
 //   node job_watch.js --config=default              (-> configs/default/config.json)
 //   node job_watch.js --config=configs/default       (same, explicit)
@@ -152,16 +152,15 @@ const path = require('path');
 //   node job_watch.js                                (defaults to configs/default/config.json)
 //
 // To run a second, independent search: `mkdir configs/other-search`, copy
-// configs/default/config.json into it and edit its "tracks"/"companies"/
-// thresholds/"location" (a candidate based somewhere else should set
-// "location" to their own target region/cities — see LOCATION POLICY below),
-// and point its "telegram.botTokenEnv"/"telegram.chatIdEnv" at a different
-// pair of env var names (e.g. TELEGRAM_BOT_TOKEN_OTHER) whose actual values
-// you set in .env locally and as separate GitHub Actions secrets — the
-// config file itself never holds a real token, only the name of the env var
-// to read. That folder's companies.csv etc. get created fresh on first run,
-// seeded from that config's "companies" array — no
-// collision with configs/default/'s state.
+// configs/default/config.json into it and edit its "tracks"/thresholds/
+// "location" (a candidate based somewhere else should set "location" to
+// their own target region/cities — see LOCATION POLICY below), and point
+// its "telegram.botTokenEnv"/"telegram.chatIdEnv" at a different pair of env
+// var names (e.g. TELEGRAM_BOT_TOKEN_OTHER) whose actual values you set in
+// .env locally and as separate GitHub Actions secrets — the config file
+// itself never holds a real token, only the name of the env var to read.
+// That folder's companies.csv gets created empty on first run — populate it
+// with --add-company / --careers-url / hand-editing, same as any profile.
 // =================================================================
 function resolveConfigPath(raw) {
   if (!raw) return path.join(__dirname, 'configs', 'default', 'config.json');
@@ -308,27 +307,13 @@ function locationAllowed(loc) {
 }
 
 // =================================================================
-// 2. TARGET COMPANY LIST — seeded from the active config's "companies"
-//    array the first time companies.csv is created for this DATA_DIR; after
-//    that, companies.csv is the source of truth (edit it by hand, or via
-//    --add-company / --careers-url / the Telegram bot) and this seed is
-//    ignored. ats = 'greenhouse' | 'ashby' | 'lever'; slug = the token in
-//    the company's public job board URL, e.g.
-//      https://job-boards.greenhouse.io/anthropic  -> slug: 'anthropic'
-//      https://jobs.ashbyhq.com/retool              -> slug: 'retool'
-//      https://jobs.lever.co/ramp                   -> slug: 'ramp'
-// =================================================================
-const TARGET_COMPANIES = CONFIG.companies || [];
-
-// =================================================================
-// 2b. COMPANY LIST CSV — companies.csv, next to this script, is the
-//     single source of truth for what gets scanned. Editable by hand,
-//     by --add-company / --careers-url, and by the Telegram bot.
-//     Columns: Name,ATS,Slug,URL,AddedAt,Via
-//       ATS 'greenhouse'|'ashby'|'lever' use Slug; ATS 'custom' uses URL
-//       (a careers page to scrape without AI — see fetchCustom below).
-//     TARGET_COMPANIES above is ONLY the seed used to create the CSV the
-//     first time; after that the CSV rules and code edits aren't needed.
+// 2. COMPANY LIST — companies.csv, in this profile's folder, is the ONE
+//    place tracked companies live — not the config, not any other file.
+//    A brand-new profile starts with an empty (header-only) CSV; populate
+//    it with --add-company / --careers-url / hand-editing.
+//    Columns: Name,ATS,Slug,URL,AddedAt,Via
+//      ATS 'greenhouse'|'ashby'|'lever' use Slug; ATS 'custom' uses URL
+//      (a careers page to scrape without AI — see fetchCustom below).
 // =================================================================
 const COMPANIES_CSV_PATH = path.join(DATA_DIR, 'companies.csv');
 const COMPANIES_CSV_HEADER = 'Name,ATS,Slug,URL,AddedAt,Via\n';
@@ -342,21 +327,8 @@ function companyCsvRow(c) {
     .map(v => `"${String(v).replace(/"/g, '""')}"`).join(',');
 }
 
-// First run after this feature: seed companies.csv from the built-in list
-// plus any legacy companies_extra.json (which is then archived).
 function ensureCompaniesCsv() {
-  if (fs.existsSync(COMPANIES_CSV_PATH)) return;
-  const seed = TARGET_COMPANIES.map(c => ({ ...c, via: 'seed' }));
-  const legacyPath = path.join(DATA_DIR, 'companies_extra.json');
-  try {
-    const extras = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
-    if (Array.isArray(extras)) seed.push(...extras);
-    fs.renameSync(legacyPath, legacyPath + '.migrated');
-    console.error('[companies] migrated companies_extra.json into companies.csv');
-  } catch { /* no legacy file */ }
-  const seen = new Set();
-  const rows = seed.filter(c => c.name && c.ats && !seen.has(companyKey(c)) && seen.add(companyKey(c)));
-  fs.writeFileSync(COMPANIES_CSV_PATH, COMPANIES_CSV_HEADER + rows.map(companyCsvRow).join('\n') + '\n');
+  if (!fs.existsSync(COMPANIES_CSV_PATH)) fs.writeFileSync(COMPANIES_CSV_PATH, COMPANIES_CSV_HEADER);
 }
 
 function getAllCompanies() {
