@@ -59,6 +59,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node hiring_cafe_scan.js --config=default --quiet
 
+      # Pushes can be rejected if origin/main moved since checkout — e.g. a
+      # manual push landing mid-run, or an overlapping run slipping past the
+      # concurrency group. Retry with a merge favoring our just-computed
+      # state (-X ours) on conflict: these are single-line cursor/cache
+      # files, so a real conflict just means "two runs updated the same
+      # timestamp" — ours is the fresher one, safe to keep unconditionally.
       - name: Commit updated state
         run: |
           git config user.name "github-actions[bot]"
@@ -68,7 +74,16 @@ jobs:
           done
           if git diff --cached --quiet; then
             echo "No state changes to commit."
-          else
-            git commit -m "chore: update job scan state [skip ci]"
-            git push
+            exit 0
           fi
+          git commit -m "chore: update job scan state [skip ci]"
+          for i in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $i/5) — remote moved, merging and retrying..."
+            git fetch origin main
+            git merge -X ours --no-edit origin/main
+          done
+          echo "Failed to push scan state after 5 attempts."
+          exit 1
