@@ -47,11 +47,25 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node job_watch.js --config=default --discover --quiet
 
+      # Separate data source (hiring.cafe, an AI-processed aggregator across
+      # 46+ ATS platforms) — same config, own dedup cursor
+      # (last_scan_hiringcafe.json), so it can't interfere with the scan
+      # above. Uses the same shared minMatch floor; its synthetic
+      # descriptions score lower on average but real matches still clear it
+      # (verified 2026-08-30: 7/20 kept jobs passed minMatch=5, top score 12%).
+      - name: Run scan (hiring.cafe)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node hiring_cafe_scan.js --config=default --quiet
+
       - name: Commit updated state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add configs/default/last_scan.json configs/default/slug_cache.json configs/default/companies.csv
+          for f in configs/default/last_scan.json configs/default/slug_cache.json configs/default/companies.csv configs/default/last_scan_hiringcafe.json; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           if git diff --cached --quiet; then
             echo "No state changes to commit."
           else

@@ -6,7 +6,8 @@
   "main": "job_watch.js",
   "scripts": {
     "scan": "node job_watch.js",
-    "watch": "node job_watch.js --watch=900"
+    "watch": "node job_watch.js --watch=900",
+    "scan:hiringcafe": "node hiring_cafe_scan.js"
   },
   "engines": {
     "node": ">=18"

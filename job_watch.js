@@ -96,9 +96,11 @@
  * makes vs. remembering every job ever seen.
  *
  * SCHEDULING: .github/workflows/scan.yml runs `node job_watch.js --config=...`
- * per configured search every 15 minutes via GitHub Actions cron, then commits
- * any changed state files back to the repo so each config's scan cursor
- * persists between runs. Set each config's Telegram env vars (default.json uses
+ * per configured search every 15 minutes via GitHub Actions cron (plus a
+ * separate hiring_cafe_scan.js step, same schedule, own dedup cursor — see
+ * that file's header), then commits any changed state files back to the
+ * repo so each config's scan cursor persists between runs. Set each
+ * config's Telegram env vars (default.json uses
  * TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID; a second config would use whatever
  * botTokenEnv/chatIdEnv names it declares, e.g. TELEGRAM_BOT_TOKEN_OTHER) as
  * repo secrets (Settings -> Secrets and variables -> Actions). Trigger a run
@@ -208,6 +210,10 @@ let API_LOG_ENABLED = true; // main() flips this off when --quiet is passed
 const apiStats = { total: 0, failed: 0 };
 let apiSeq = 0;
 
+// For other scripts that require() this file (e.g. hiring_cafe_scan.js) and
+// want their own --quiet to also quiet the shared fetch-logging wrapper below.
+function setApiLogEnabled(v) { API_LOG_ENABLED = v; }
+
 function apiLog(msg) {
   if (API_LOG_ENABLED) console.error(`[api ${new Date().toISOString()}] ${msg}`);
 }
@@ -256,12 +262,15 @@ const MIN_SALARY = CONFIG.minSalary ?? 180000;
 
 // Minimum keyword-match % for a job to be "good enough" to push to Telegram
 // (and, with --discover, to auto-add the company for direct tracking).
-// NOTE ON SCALE: the score is (skill terms found in the JD) / (the track's
-// ENTIRE skill-term list), so even excellent fits often score in the teens —
-// a JD never mentions every term on the list. Calibrate per-config against
-// a full scan of your own results.
+// NOTE ON SCALE: the score is (CORE skill terms found in the JD) / (the
+// track's core skill-term list — see scoreJob()), so even excellent fits
+// often score well under 100% — a JD never mentions every term on the list.
+// Calibrated 2026-08-29, after splitting skillTerms into core/bonus, against
+// a full scan (70 matching roles: median 9%, top quartile 12%, top decile
+// 16%, max 36%). Recalibrate per-config against a full scan of your own
+// results if you edit a track's core list size.
 // Set per-config as "minMatch"; override at runtime with --min-match=15
-const GOOD_MATCH_THRESHOLD = CONFIG.minMatch ?? 4;
+const GOOD_MATCH_THRESHOLD = CONFIG.minMatch ?? 5;
 
 // Ignore postings older than this many days (based on the ATS's own
 // posted/updated timestamp). Set per-config as "maxAgeDays"; override at
@@ -290,7 +299,7 @@ const REMOTE_INCLUDE_RE = new RegExp(
   'united states|\\bus\\b|\\busa\\b|north america|americas|worldwide|anywhere|global', 'i');
 const REMOTE_EXCLUDE_RE = new RegExp(
   LOCATION_CONFIG.remoteExcludePattern ||
-  'emea|europe|apac|latam|canada|\\buk\\b|united kingdom|australia|india|germany|japan|singapore|brazil|mexico|poland|philippines|south korea', 'i');
+  'emea|europe|apac|latam|mena|\\bcanada\\b|\\buk\\b|united kingdom|\\bireland\\b|\\bfrance\\b|\\bgermany\\b|\\bspain\\b|\\bitaly\\b|\\bportugal\\b|netherlands|\\bbelgium\\b|switzerland|\\baustria\\b|\\bsweden\\b|\\bnorway\\b|\\bdenmark\\b|\\bfinland\\b|\\bpoland\\b|\\bromania\\b|\\bgreece\\b|czech republic|czechia|\\bhungary\\b|\\bbulgaria\\b|\\bcroatia\\b|\\bslovakia\\b|\\bslovenia\\b|lithuania|\\blatvia\\b|\\bestonia\\b|\\bukraine\\b|\\bserbia\\b|\\biceland\\b|luxembourg|\\bmalta\\b|\\bcyprus\\b|\\bturkey\\b|\\baustralia\\b|new zealand|\\bchina\\b|\\bjapan\\b|south korea|\\bkorea\\b|\\bindia\\b|singapore|hong kong|\\btaiwan\\b|thailand|vietnam|indonesia|malaysia|philippines|pakistan|bangladesh|\\bnepal\\b|sri lanka|united arab emirates|\\buae\\b|saudi arabia|\\bksa\\b|\\bisrael\\b|\\bqatar\\b|\\bkuwait\\b|bahrain|\\boman\\b|\\bjordan\\b|lebanon|\\begypt\\b|south africa|nigeria|\\bkenya\\b|morocco|\\bghana\\b|\\bmexico\\b|\\bbrazil\\b|argentina|\\bchile\\b|colombia|\\bperu\\b|ecuador|venezuela|uruguay|costa rica|\\bpanama\\b|guatemala', 'i');
 const HYBRID_ONSITE_ALLOWED = (LOCATION_CONFIG.hybridOnsiteAllowed
   || ['washington, dc', 'washington, d.c.', ', dc', 'richmond, va', 'richmond, virginia']
 ).map(s => s.toLowerCase());
@@ -581,6 +590,13 @@ function detectEmbeddedAts(rawHtml) {
   if ((m = html.match(/([a-z0-9-]+)\.recruitee\.com/i))) return { ats: 'recruitee', slug: m[1] };
   if ((m = html.match(/(?:careers|jobs|api)\.smartrecruiters\.com\/(?:v1\/companies\/)?([A-Za-z0-9]+)/))) return { ats: 'smartrecruiters', slug: m[1] };
   if ((m = html.match(/ats\.rippling\.com\/([a-z0-9-]+)/i))) return { ats: 'rippling', slug: m[1] };
+  // Some frameworks (Svelte/Next "public env") bake the board name into a
+  // JSON config blob instead of a full board URL, e.g.
+  // "PUBLIC_GREENHOUSE_BOARD":"block" — no greenhouse.io URL anywhere in the
+  // page at all (seen on block.xyz, which renders its list client-side).
+  if ((m = html.match(/"[A-Z0-9_]*GREENHOUSE_BOARD[A-Z0-9_]*"\s*:\s*"([A-Za-z0-9_-]+)"/))) return { ats: 'greenhouse', slug: m[1] };
+  if ((m = html.match(/"[A-Z0-9_]*LEVER_(?:SITE|BOARD|SLUG)[A-Z0-9_]*"\s*:\s*"([A-Za-z0-9_-]+)"/))) return { ats: 'lever', slug: m[1] };
+  if ((m = html.match(/"[A-Z0-9_]*ASHBY_(?:JOB_BOARD|BOARD|ORG|SLUG)[A-Z0-9_]*"\s*:\s*"([A-Za-z0-9_%.-]+)"/))) return { ats: 'ashby', slug: decodeURIComponent(m[1]) };
   return null;
 }
 
@@ -928,6 +944,12 @@ function formatTelegramMessage(job, run) {
   const swaps = job.suggestedSwaps.length
     ? `\nSwap: ${job.suggestedSwaps.map(s => `"${s.youHaveAs}"→"${s.jdUsesPhrase}"`).join(', ')}`
     : '';
+  const matched = (job.matchedTerms || []).length
+    ? `\nMatched: ${job.matchedTerms.map(escapeHtml).join(', ')}`
+    : '';
+  const bonus = (job.bonusTerms || []).length
+    ? `\n+ Bonus tools: ${job.bonusTerms.map(escapeHtml).join(', ')}`
+    : '';
   const sourceTag = job.source ? ` (via ${job.source} discovery)` : '';
   const locTag = job.isRemote ? '🏠 Remote' : '🏢 Hybrid';
   const runLine = run ? `\n<i>${escapeHtml(run.timestampLocal)}</i>` : '';
@@ -935,7 +957,7 @@ function formatTelegramMessage(job, run) {
     `<b>${escapeHtml(job.companyDisplay)}</b> — ${escapeHtml(job.title)} [${locTag}]${sourceTag}\n` +
     `Track: ${escapeHtml(job.track)}\n` +
     `Match: ${job.matchPct}% | Salary: ${escapeHtml(job.salary)} | Posted ${hoursAgo}h ago\n` +
-    `${job.url}${swaps}${runLine}`
+    `${job.url}${matched}${bonus}${swaps}${runLine}`
   );
 }
 
@@ -956,21 +978,29 @@ function classifyTrack(title) {
   return bestHits > 0 ? best : null;
 }
 
+// Each track's skillTerms is { core: [...], bonus: [...] }. matchPct is
+// scored against core only — terms a third-party JD in this field would
+// plausibly use (generic skills, near-universal platforms) — so the
+// percentage stays meaningful. bonus holds specific tools/vendors (n8n,
+// Chargebee, La Growth Machine...) that only a company using that exact
+// tool would mention; those matches are reported separately, not folded
+// into the denominator, since one candidate's whole toolset is never going
+// to appear verbatim in someone else's job posting.
 function scoreJob(job, trackKey) {
   const track = TRACKS[trackKey];
   const descLower = job.description.toLowerCase();
-  const haveTerms = [];
-  const missingTerms = [];
+  const coreTerms = track.skillTerms.core || [];
+  const bonusTerms = track.skillTerms.bonus || [];
+  const allTerms = [...coreTerms, ...bonusTerms];
 
-  for (const term of track.skillTerms) {
-    if (descLower.includes(term.toLowerCase())) haveTerms.push(term);
-  }
+  const haveTerms = coreTerms.filter(term => descLower.includes(term.toLowerCase()));
+  const haveBonusTerms = bonusTerms.filter(term => descLower.includes(term.toLowerCase()));
 
   // Find JD terms you don't literally have but DO have via synonym —
   // these are your safe, non-obvious keyword swaps.
   const suggestedSwaps = [];
   for (const [jdTerm, resumeTerm] of SYNONYMS) {
-    if (descLower.includes(jdTerm) && track.skillTerms.includes(resumeTerm)) {
+    if (descLower.includes(jdTerm) && allTerms.includes(resumeTerm)) {
       suggestedSwaps.push({ jdUsesPhrase: jdTerm, youHaveAs: resumeTerm });
     }
   }
@@ -980,13 +1010,14 @@ function scoreJob(job, trackKey) {
   const requirementSignals = ['required', 'must have', 'requirements', 'qualifications', 'you have', 'you bring'];
   const hasRequirementsSection = requirementSignals.some(s => descLower.includes(s));
 
-  const matchPct = track.skillTerms.length
-    ? Math.round((haveTerms.length / track.skillTerms.length) * 100)
+  const matchPct = coreTerms.length
+    ? Math.round((haveTerms.length / coreTerms.length) * 100)
     : 0;
 
   return {
     matchPct,
     haveTerms,
+    haveBonusTerms,
     suggestedSwaps,
     hasRequirementsSection
   };
@@ -1071,7 +1102,7 @@ async function scanAll(opts = {}) {
     }
     stat.kept++;
 
-    const { matchPct, haveTerms, suggestedSwaps } = scoreJob(job, trackKey);
+    const { matchPct, haveTerms, haveBonusTerms, suggestedSwaps } = scoreJob(job, trackKey);
     results.push({
       companyDisplay,
       source, // undefined for direct-ATS, 'remotive' / 'themuse' for discovery
@@ -1085,6 +1116,7 @@ async function scanAll(opts = {}) {
       postedOrUpdated: job.updatedAt,
       matchPct,
       matchedTerms: haveTerms,
+      bonusTerms: haveBonusTerms,
       suggestedSwaps,
       salary: salary ? `$${salary.min.toLocaleString()}-$${salary.max.toLocaleString()}` : 'not listed'
     });
@@ -1192,6 +1224,12 @@ function printTable(results, meta) {
     console.log(`   Track: ${r.track} (use ${r.resumeFile})`);
     console.log(`   Location: ${r.location || 'n/a'} | Salary: ${r.salary} | Posted/updated: ${hoursAgo}h ago | Match: ${r.matchPct}%`);
     console.log(`   Apply direct: ${r.url}`);
+    if (r.matchedTerms && r.matchedTerms.length) {
+      console.log(`   Matched: ${r.matchedTerms.join(', ')}`);
+    }
+    if (r.bonusTerms && r.bonusTerms.length) {
+      console.log(`   + Bonus tools: ${r.bonusTerms.join(', ')}`);
+    }
     if (r.suggestedSwaps.length) {
       console.log(`   Keyword swaps to make: ${r.suggestedSwaps.map(s => `"${s.youHaveAs}" -> "${s.jdUsesPhrase}"`).join(', ')}`);
     }
@@ -1475,4 +1513,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { performScan, getAllCompanies, sendTelegramMessage };
+// Exported beyond the CLI's own needs so other scripts in this folder (e.g.
+// hiring_cafe_scan.js) can reuse this profile's exact tracks/thresholds/
+// location policy/Telegram destination instead of redefining their own.
+module.exports = {
+  performScan, getAllCompanies, sendTelegramMessage,
+  CONFIG, DATA_DIR, DISCOVERY_QUERIES,
+  classifyTrack, scoreJob, locationAllowed,
+  REMOTE_INCLUDE_RE, REMOTE_EXCLUDE_RE,
+  MIN_SALARY, GOOD_MATCH_THRESHOLD, MAX_AGE_DAYS, EXCLUDED_TITLE_TERMS,
+  formatTelegramMessage, setApiLogEnabled
+};
