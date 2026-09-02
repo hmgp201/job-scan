@@ -9,11 +9,26 @@
  * and running the exact same classifyTrack/scoreJob/locationAllowed logic
  * against hiring.cafe's results — same config, same rules, different feed.
  *
- * Wired into .github/workflows/scan.yml as its own step (separate from
- * job_watch.js's ATS scan) — same schedule, same config, own dedup cursor.
+ * STATUS (as of 2026-09-02): NOT currently scheduled in
+ * .github/workflows/scan.yml — hiringcafe.com now puts a real Cloudflare
+ * bot-challenge in front of the /search page this script reads to resolve
+ * its Next.js build id (cf-mitigated: challenge, a "Just a moment..." JS
+ * challenge page). Verified directly this isn't a header/User-Agent
+ * problem — a realistic Chrome UA plus full browser Accept/Accept-Language
+ * headers still gets challenged, from both a local machine and GitHub
+ * Actions runners. Passing a real Cloudflare challenge needs a
+ * JS-executing browser (e.g. Playwright), which this lightweight
+ * fetch-based scanner deliberately doesn't carry — left as-is rather than
+ * built out, since that's a much heavier dependency and starts to cross
+ * from "read a public page" into "actively defeat a site's anti-bot
+ * measures." This file is otherwise untouched, kept working code in case
+ * the challenge is ever relaxed — re-add a step to scan.yml
+ * (node hiring_cafe_scan.js --config=<profile> --quiet) to turn it back on.
  * Can still be run by hand: node hiring_cafe_scan.js / npm run scan:hiringcafe
+ * — it'll just fail with the 403 until hiring.cafe's protection changes.
  *
- * HOW THIS ACTUALLY WORKS (three approaches tried, in order):
+ * HOW THIS ACTUALLY WORKED (three approaches tried, in order, before the
+ * Cloudflare challenge above shut all of them off):
  *   1. hiring.cafe's private search API (POST/GET /api/search-jobs) — DEAD
  *      END. Tested directly with their own frontend's exact headers/payload:
  *      401/405 either way. This is bot-gated, not just undocumented.

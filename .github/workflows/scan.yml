@@ -47,17 +47,17 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node job_watch.js --config=default --discover --quiet
 
-      # Separate data source (hiring.cafe, an AI-processed aggregator across
-      # 46+ ATS platforms) — same config, own dedup cursor
-      # (last_scan_hiringcafe.json), so it can't interfere with the scan
-      # above. Uses the same shared minMatch floor; its synthetic
-      # descriptions score lower on average but real matches still clear it
-      # (verified 2026-08-30: 7/20 kept jobs passed minMatch=5, top score 12%).
-      - name: Run scan (hiring.cafe)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node hiring_cafe_scan.js --config=default --quiet
+      # hiring.cafe (a separate data source, hiring_cafe_scan.js) is NOT run
+      # here anymore — as of 2026-09-02 hiringcafe.com put up a real
+      # Cloudflare bot-challenge ("Just a moment...", cf-mitigated: challenge)
+      # in front of the page this script reads to resolve its Next.js build
+      # id. That's not fixable with headers/User-Agent (verified directly —
+      # a realistic Chrome UA + full browser headers still gets challenged);
+      # it needs a JS-executing browser, which this lightweight fetch-based
+      # scanner doesn't have. hiring_cafe_scan.js itself is untouched (in
+      # case the challenge is later relaxed) — just not scheduled. Re-enable
+      # by adding back a step here: node hiring_cafe_scan.js --config=default --quiet
+      # (env: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID).
 
       # Second, independent search: configs/uk-design/config.json — Technical
       # Design / Retail Design roles (Kit Pethel), remote (or open-to-UK
@@ -71,14 +71,10 @@ jobs:
       # companies and never surfaced a single genuinely UK-located match
       # (see configs/uk-design/companies.csv, kept on disk but no longer
       # scanned — a UK design/retail-industry search is much better served
-      # by UK-market job-board APIs, see scan-uk-boards.yml). hiring.cafe
-      # stays here since it's a broad, region-configurable aggregator, not a
-      # curated company list.
-      - name: Run scan (uk-design, hiring.cafe)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID_UK_DESIGN: ${{ secrets.TELEGRAM_CHAT_ID_UK_DESIGN }}
-        run: node hiring_cafe_scan.js --config=uk-design --quiet
+      # by UK-market job-board APIs, see scan-uk-boards.yml). Its hiring.cafe
+      # step is retired too, same reason/re-enable instructions as above
+      # (node hiring_cafe_scan.js --config=uk-design --quiet, env:
+      # TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID_UK_DESIGN).
 
       # Pushes can be rejected if origin/main moved since checkout — e.g. a
       # manual push landing mid-run, or an overlapping run slipping past the
@@ -90,8 +86,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          for f in configs/default/last_scan.json configs/default/slug_cache.json configs/default/companies.csv configs/default/last_scan_hiringcafe.json \
-                   configs/uk-design/last_scan_hiringcafe.json; do
+          for f in configs/default/last_scan.json configs/default/slug_cache.json configs/default/companies.csv; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           if git diff --cached --quiet; then
