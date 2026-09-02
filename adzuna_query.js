@@ -43,15 +43,15 @@ const path = require('path');
 // doc notes for why) — set any of them to try server-side filtering.
 // Full parameter reference: https://developer.adzuna.com/docs/search
 // =================================================================
-const WHAT = 'technical designer';       // keyword search. Production loops this over configs/uk-design/config.json's "boardQueries" (5 terms) — one at a time here.
+const WHAT = 'technical design engineer';       // keyword search. Production loops this over configs/uk-design/config.json's "boardQueries" (5 terms) — one at a time here.
 const COUNTRY = 'gb';                    // Adzuna country code. Production: configs/uk-design/config.json's "adzunaCountry".
 const RESULTS_PER_PAGE = 50;             // results in this page (Adzuna max is 50). Production default.
 const PAGE = 1;                          // page number. Production always uses page 1.
 const SORT_BY = 'date';                  // 'date' | 'relevance' | 'salary'. Production uses 'date' (newest first).
 const CONTENT_TYPE = '1';                // '1' = full job description in the response; omit/null for a short snippet. Production uses full.
 
-const WHERE = null;                      // e.g. 'London' — location text filter. NOT used in production (whole-country search, filtered client-side).
-const SALARY_MIN = null;                 // e.g. 65000. NOT used in production — see adzuna_scan.js's SALARY doc note (predicted-salary ambiguity).
+const WHERE = 'London';                      // e.g. 'London' — location text filter. NOT used in production (whole-country search, filtered client-side).
+const SALARY_MIN = 60000;                 // e.g. 65000. NOT used in production — see adzuna_scan.js's SALARY doc note (predicted-salary ambiguity).
 const SALARY_MAX = null;
 const WHAT_EXCLUDE = null;               // e.g. 'internship' — exclude keyword. NOT used in production.
 const FULL_TIME = null;                  // 1 | 0 | null(any). NOT used in production.
