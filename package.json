@@ -7,7 +7,11 @@
   "scripts": {
     "scan": "node job_watch.js",
     "watch": "node job_watch.js --watch=900",
-    "scan:hiringcafe": "node hiring_cafe_scan.js"
+    "scan:hiringcafe": "node hiring_cafe_scan.js",
+    "scan:ukdesign": "node job_watch.js --config=uk-design",
+    "scan:ukdesign:hiringcafe": "node hiring_cafe_scan.js --config=uk-design",
+    "scan:ukdesign:adzuna": "node adzuna_scan.js --config=uk-design",
+    "scan:ukdesign:reed": "node reed_scan.js --config=uk-design"
   },
   "engines": {
     "node": ">=18"

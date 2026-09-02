@@ -54,9 +54,9 @@
  * rather than regex-parsed out of description text.
  *
  * LOCATION: this profile's target region for hiring.cafe's own location
- * filter is hardcoded to "United States" below (HIRING_CAFE_LOCATION) since
- * there's no existing config field for it — edit that constant if you copy
- * this script for a profile targeting a different country. The broader
+ * filter comes from the config's "hiringCafeLocation" field (HIRING_CAFE_LOCATION
+ * below), defaulting to "United States" if a config omits it — see
+ * configs/uk-design/config.json for a non-US example. The broader
  * remote/hybrid ALLOW-list logic (locationAllowed(), reused from
  * job_watch.js) still applies on top of that per-job, same as every other
  * source.
@@ -74,15 +74,16 @@ const {
   CONFIG, DATA_DIR, DISCOVERY_QUERIES,
   classifyTrack, scoreJob, locationAllowed,
   REMOTE_INCLUDE_RE, REMOTE_EXCLUDE_RE,
-  MIN_SALARY, GOOD_MATCH_THRESHOLD, MAX_AGE_DAYS, EXCLUDED_TITLE_TERMS,
+  MIN_SALARY, GOOD_MATCH_THRESHOLD, MAX_AGE_DAYS, EXCLUDED_TITLE_TERMS, CURRENCY_SYMBOL, SCORING_ENABLED,
   formatTelegramMessage, sendTelegramMessage, setApiLogEnabled
 } = require('./job_watch.js');
 
-// See the LOCATION doc note above.
-// The full nested shape is required — verified directly that a partial object
-// (just formatted_address/types) silently zeroes out ALL results rather than
-// erroring, so don't trim this down even though most of it looks redundant.
-const HIRING_CAFE_LOCATION = {
+// See the LOCATION doc note above. Set per-config as "hiringCafeLocation"
+// (full nested shape — verified directly that a partial object, just
+// formatted_address/types, silently zeroes out ALL results rather than
+// erroring, so don't trim a config's copy of this down even though most of
+// it looks redundant). Defaults to this project's original US targeting.
+const HIRING_CAFE_LOCATION = CONFIG.hiringCafeLocation || {
   formatted_address: 'United States',
   types: ['country'],
   geometry: { location: { lat: '39.8283', lon: '-98.5795' } },
@@ -320,7 +321,7 @@ function filterAndScore(jobs, { minSalary, maxAgeDays, strict }, funnel) {
       matchedTerms: haveTerms,
       bonusTerms: haveBonusTerms,
       suggestedSwaps,
-      salary: job.salary ? `$${job.salary.min.toLocaleString()}-$${job.salary.max.toLocaleString()}` : 'not listed'
+      salary: job.salary ? `${CURRENCY_SYMBOL}${job.salary.min.toLocaleString()}-${CURRENCY_SYMBOL}${job.salary.max.toLocaleString()}` : 'not listed'
     });
   }
   results.sort((a, b) =>
@@ -339,7 +340,13 @@ async function main() {
   const minMatchArg = args.find(a => a.startsWith('--min-match='));
   const maxAgeArg = args.find(a => a.startsWith('--max-age='));
   const minSalary = minSalaryArg ? parseInt(minSalaryArg.split('=')[1], 10) : MIN_SALARY;
-  const minMatch = minMatchArg ? parseInt(minMatchArg.split('=')[1], 10) : GOOD_MATCH_THRESHOLD;
+  // hiring.cafe's synthetic description (built from requirements_summary +
+  // technical_tools + role_activities, not the real JD text — see the header
+  // note) tends to score lower than a real posting against the same skill
+  // list, so a config can set a separate, more lenient floor for this source
+  // via "hiringCafeMinMatch" (falls back to the shared minMatch if unset, so
+  // existing configs are unaffected).
+  const minMatch = minMatchArg ? parseInt(minMatchArg.split('=')[1], 10) : (CONFIG.hiringCafeMinMatch ?? GOOD_MATCH_THRESHOLD);
   const maxAgeDays = maxAgeArg ? parseFloat(maxAgeArg.split('=')[1]) : MAX_AGE_DAYS;
 
   hcLog(`"${CONFIG.name}": starting scan, ${DISCOVERY_QUERIES.length} quer${DISCOVERY_QUERIES.length === 1 ? 'y' : 'ies'}, target location "${HIRING_CAFE_LOCATION.formatted_address}"`);
@@ -380,14 +387,16 @@ async function main() {
       `${funnel.belowSalary} below salary floor)`);
 
     console.log(`\n[hiring.cafe] Found ${results.length} matching role(s) ` +
-      `(min salary floor: $${minSalary.toLocaleString()}, max age: ${maxAgeDays}d):\n`);
+      `(min salary floor: ${CURRENCY_SYMBOL}${minSalary.toLocaleString()}, max age: ${maxAgeDays}d):\n`);
     for (const r of results) {
       const hoursAgo = Math.round((Date.now() - new Date(r.postedOrUpdated)) / 3600000);
       console.log(`── ${r.companyDisplay} — ${r.title} [${r.isRemote ? 'REMOTE' : 'hybrid/onsite'}]`);
-      console.log(`   Track: ${r.track} | Location: ${r.location || 'n/a'} | Salary: ${r.salary} | Posted ${hoursAgo}h ago | Match: ${r.matchPct}%`);
+      console.log(`   Track: ${r.track} | Location: ${r.location || 'n/a'} | Salary: ${r.salary} | Posted ${hoursAgo}h ago${SCORING_ENABLED ? ` | Match: ${r.matchPct}%` : ''}`);
       console.log(`   Apply: ${r.url}`);
-      if (r.matchedTerms && r.matchedTerms.length) console.log(`   Matched: ${r.matchedTerms.join(', ')}`);
-      if (r.bonusTerms && r.bonusTerms.length) console.log(`   + Bonus tools: ${r.bonusTerms.join(', ')}`);
+      if (SCORING_ENABLED) {
+        if (r.matchedTerms && r.matchedTerms.length) console.log(`   Matched: ${r.matchedTerms.join(', ')}`);
+        if (r.bonusTerms && r.bonusTerms.length) console.log(`   + Bonus tools: ${r.bonusTerms.join(', ')}`);
+      }
     }
     console.log(`\n${newSinceLastScan.length} of ${results.length} posted/updated since the last hiring.cafe scan` +
       (cutoffIso ? ` (${cutoffIso}).` : ' (first scan for this profile).'));
@@ -397,13 +406,13 @@ async function main() {
   const statusLog = jsonOut ? console.error : console.log;
   if (!noTelegram && telegramConfigured) {
     const run = { timestamp: new Date().toISOString(), timestampLocal: new Date().toLocaleString() };
-    const toSend = newSinceLastScan.filter(j => j.matchPct >= minMatch);
+    const toSend = SCORING_ENABLED ? newSinceLastScan.filter(j => j.matchPct >= minMatch) : newSinceLastScan;
     let sent = 0;
     for (const job of toSend) {
       const ok = await sendTelegramMessage(formatTelegramMessage(job, run));
       if (ok) sent++;
     }
-    if (toSend.length) statusLog(`[Telegram] Sent ${sent}/${toSend.length} hiring.cafe alert(s) at/above ${minMatch}% match.`);
+    if (toSend.length) statusLog(`[Telegram] Sent ${sent}/${toSend.length} hiring.cafe alert(s)${SCORING_ENABLED ? ` at/above ${minMatch}% match` : ''}.`);
     saveLastScanAt(run.timestamp);
   } else if (newSinceLastScan.length) {
     const why = noTelegram ? '--no-telegram passed' : `${CONFIG.telegram.botTokenEnv}/${CONFIG.telegram.chatIdEnv} not set`;

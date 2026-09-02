@@ -1,0 +1,75 @@
+name: UK job board scan
+
+on:
+  schedule:
+    # Separate, slower schedule from scan.yml's every-15-min — Adzuna's free
+    # tier caps at 250 calls/day AND 2500/month (the monthly cap is the
+    # binding one, ≈83/day). configs/uk-design/config.json's "boardQueries"
+    # is 5 terms, so one run = 5 Adzuna calls; every 2 hours = 12 runs/day =
+    # 60 calls/day (1800/month) — well inside both caps with room for manual
+    # testing on top. Reed's cap (1000/day) isn't the constraint here, but
+    # there's no reason to poll it faster than Adzuna.
+    - cron: '0 */2 * * *'
+  workflow_dispatch: {}
+
+# Never run two scans of this profile at once — same reasoning as scan.yml.
+concurrency:
+  group: uk-boards-scan
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # https://developer.adzuna.com — free instant signup, no card.
+      - name: Run scan (uk-design, Adzuna)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID_UK_DESIGN: ${{ secrets.TELEGRAM_CHAT_ID_UK_DESIGN }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+        run: node adzuna_scan.js --config=uk-design --quiet
+
+      # https://www.reed.co.uk/developers/jobseeker — free signup, no card.
+      - name: Run scan (uk-design, Reed)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID_UK_DESIGN: ${{ secrets.TELEGRAM_CHAT_ID_UK_DESIGN }}
+          REED_API_KEY: ${{ secrets.REED_API_KEY }}
+        run: node reed_scan.js --config=uk-design --quiet
+
+      # Same retry-on-conflict pattern as scan.yml's commit step.
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          for f in configs/uk-design/last_scan_adzuna.json configs/uk-design/last_scan_reed.json; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
+          if git diff --cached --quiet; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: update UK board scan state [skip ci]"
+          for i in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $i/5) — remote moved, merging and retrying..."
+            git fetch origin main
+            git merge -X ours --no-edit origin/main
+          done
+          echo "Failed to push scan state after 5 attempts."
+          exit 1

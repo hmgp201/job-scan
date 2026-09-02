@@ -48,21 +48,32 @@
  *          (or finds several), force it:
  *   node job_watch.js --add-company="Second Nature" --ats=greenhouse --slug=secondnature
  *
+ *   Workday doesn't fit that auto-guess (its "site" code is arbitrary — e.g.
+ *   Nike's is "nke", not "nike"), so force it with the full board URL once
+ *   you have one (find it via --careers-url below, or by watching a
+ *   company's careers page redirect to *.myworkdayjobs.com):
+ *   node job_watch.js --add-company="Nike" --ats=workday --slug="https://nike.wd1.myworkdayjobs.com/nke"
+ *
  *   node job_watch.js --add-company="Retool" --careers-url="https://retool.com/careers"
  *       -> for companies NOT on a supported ATS: scrape their own careers
  *          page, no AI involved. Detection cascade: (1) embedded known-ATS
- *          board hiding in the HTML (Greenhouse/Lever/Ashby/Workable/
- *          Recruitee/SmartRecruiters/Rippling -> their public JSON APIs),
+ *          board hiding in the HTML (Greenhouse/Lever/Ashby/Workday/
+ *          Workable/Recruitee/SmartRecruiters/Rippling -> their public JSON
+ *          APIs — this is how most Workday boards get found in practice: a
+ *          company's own careers page is a thin marketing shell over a
+ *          myworkdayjobs.com tenant, and even a client-side-rendered shell
+ *          usually leaks one absolute job link to it in the initial HTML),
  *          (2) schema.org JobPosting JSON-LD blocks, (3) job-link URL
- *          pattern grouping. Limitation: pages that only render listings
- *          with client-side JS can't be scraped this way — the add command
+ *          pattern grouping. Limitation: pages with NO such link anywhere in
+ *          the initial HTML can't be scraped this way — the add command
  *          tests the page and tells you what it found before saving.
  *
  *   THE COMPANY LIST LIVES ONLY IN <profile folder>/companies.csv — created
  *   empty (header-only) on first run for a new profile; populate it with
  *   --add-company / --careers-url / hand-editing. Columns: Name,ATS,Slug,
  *   URL,AddedAt,Via — edit it by hand freely. ATS is greenhouse|ashby|lever
- *   (uses Slug) or custom (uses URL).
+ *   (uses Slug) or custom|workday (uses URL — any
+ *   https://<tenant>.<dc>.myworkdayjobs.com/<site> board URL for workday).
  *
  *   NOTE: this is a one-way notifier, not a chat bot — it only SENDS
  *   Telegram messages. It runs as a scheduled GitHub Actions cron job with
@@ -219,7 +230,14 @@ function apiLog(msg) {
 }
 
 function redactUrl(url) {
-  return String(url).replace(/\/bot[^/]+\//, '/bot<TOKEN>/');
+  return String(url)
+    .replace(/\/bot[^/]+\//, '/bot<TOKEN>/')
+    // Generic credential-bearing query params (Adzuna's app_key, Reed's key=
+    // if ever passed that way, any future source's api_key/token/secret) —
+    // app_id/client_id etc are left alone since those aren't secret on their
+    // own. Caught in practice: Adzuna's app_key was logged here in full
+    // before this existed.
+    .replace(/([?&](?:\w*(?:api|app)[_-]?key|\w*access[_-]?token|\btoken|\bsecret|\bpassword)=)[^&]+/gi, '$1<REDACTED>');
 }
 
 const rawFetch = globalThis.fetch;
@@ -272,10 +290,27 @@ const MIN_SALARY = CONFIG.minSalary ?? 180000;
 // Set per-config as "minMatch"; override at runtime with --min-match=15
 const GOOD_MATCH_THRESHOLD = CONFIG.minMatch ?? 5;
 
+// A config for a literal, small set of job titles (rather than a broad,
+// fuzzy "similar roles" search) has no real use for a resume/JD keyword-
+// overlap score — every title in the search IS the target, there's nothing
+// to rank by fit. Set per-config as "scoring": false to turn the whole
+// skillTerms/matchPct/minMatch machinery off: classifyTrack (title match)
+// and the hard filters (age/location/salary/excluded terms) still apply,
+// every job that clears them gets sent, and Telegram messages/console
+// output drop the Match/Matched/Bonus lines. Defaults to on (true) so
+// existing configs are unaffected.
+const SCORING_ENABLED = CONFIG.scoring !== false;
+
 // Ignore postings older than this many days (based on the ATS's own
 // posted/updated timestamp). Set per-config as "maxAgeDays"; override at
 // runtime with --max-age=7
 const MAX_AGE_DAYS = CONFIG.maxAgeDays ?? 3;
+
+// Display-only symbol for salary output. Set per-config as "currencySymbol"
+// (e.g. "£" for a GBP-targeted config) — extractSalaryRange() below matches
+// both $ and £ regardless of this setting; it only controls how MIN_SALARY
+// and extracted ranges are printed.
+const CURRENCY_SYMBOL = CONFIG.currencySymbol || '$';
 
 // Titles containing any of these are dropped no matter what track they'd
 // otherwise match (e.g. "Strategy & Operations Lead, Enterprise Marketing").
@@ -321,14 +356,19 @@ function locationAllowed(loc) {
 //    A brand-new profile starts with an empty (header-only) CSV; populate
 //    it with --add-company / --careers-url / hand-editing.
 //    Columns: Name,ATS,Slug,URL,AddedAt,Via
-//      ATS 'greenhouse'|'ashby'|'lever' use Slug; ATS 'custom' uses URL
-//      (a careers page to scrape without AI — see fetchCustom below).
+//      ATS 'greenhouse'|'ashby'|'lever' use Slug; ATS 'custom' (a careers
+//      page to scrape without AI — see fetchCustom below) or 'workday' (any
+//      https://<tenant>.<dc>.myworkdayjobs.com/<site> board URL — see
+//      fetchWorkday below) use URL instead.
 // =================================================================
 const COMPANIES_CSV_PATH = path.join(DATA_DIR, 'companies.csv');
 const COMPANIES_CSV_HEADER = 'Name,ATS,Slug,URL,AddedAt,Via\n';
 
+// 'custom' and 'workday' both key off URL instead of Slug.
+function usesUrlColumn(ats) { return ats === 'custom' || ats === 'workday'; }
+
 function companyKey(c) {
-  return c.ats === 'custom' ? `custom:${c.url}` : `${c.ats}:${c.slug}`;
+  return usesUrlColumn(c.ats) ? `${c.ats}:${c.url}` : `${c.ats}:${c.slug}`;
 }
 
 function companyCsvRow(c) {
@@ -356,7 +396,7 @@ function getAllCompanies() {
       addedAt: f[idx.AddedAt] || '', via: f[idx.Via] || ''
     };
     if (!c.name || !c.ats) continue;
-    if (c.ats === 'custom' ? !c.url : !c.slug) continue;
+    if (usesUrlColumn(c.ats) ? !c.url : !c.slug) continue;
     if (seen.has(companyKey(c))) continue;
     seen.add(companyKey(c));
     out.push(c);
@@ -421,6 +461,13 @@ async function probeLever(slug) {
 }
 
 const PROBES = { greenhouse: probeGreenhouse, ashby: probeAshby, lever: probeLever };
+// Workday isn't in PROBES proper: resolveCompany()'s auto-guessing below only
+// tries PROBES against slugCandidates() (company-name-derived slugs), which
+// doesn't work for Workday — its site name is an arbitrary short code (Nike's
+// is "nke", not "nike"/"nikeinc") that can't be derived from the company
+// name. A Workday board can only be added once you have its real board URL
+// (from --careers-url embedded-detection, or by hand) — see
+// addCompanyByName()'s forced path and probeWorkday() in section 3a below.
 
 // Returns hits sorted best-first: name-verified boards, then by job count.
 // nameVerified: true (board name matches), false (board exists but the name
@@ -458,6 +505,7 @@ async function resolveCompany(name) {
 function boardUrl(hit) {
   if (hit.ats === 'greenhouse') return `https://job-boards.greenhouse.io/${hit.slug}`;
   if (hit.ats === 'ashby') return `https://jobs.ashbyhq.com/${hit.slug}`;
+  if (hit.ats === 'workday') return hit.slug; // slug IS the full board URL for workday
   return `https://jobs.lever.co/${hit.slug}`;
 }
 
@@ -531,6 +579,10 @@ function extractSalaryRange(text) {
     /\$\s?(\d{2,3}(?:\.\d+)?)\s?(k|000)?\s?(?:-|–|—|to)\s?\$?\s?(\d{2,3}(?:\.\d+)?)\s?(k|000)?/i,
     // 180,000 - 220,000 USD  (no leading $)
     /(\d{2,3})(?:,?000)?\s?(k)?\s?(?:-|–|—|to)\s?(\d{2,3})(?:,?000)?\s?(k)?\s?(?:USD|usd)/,
+    // £35,000 - £45,000  /  £35000-£45000  /  with "to" (GBP-targeted configs)
+    /£\s?(\d{2,3}(?:\.\d+)?)\s?(k|000)?\s?(?:-|–|—|to)\s?£?\s?(\d{2,3}(?:\.\d+)?)\s?(k|000)?/i,
+    // 35,000 - 45,000 GBP  (no leading £)
+    /(\d{2,3})(?:,?000)?\s?(k)?\s?(?:-|–|—|to)\s?(\d{2,3})(?:,?000)?\s?(k)?\s?(?:GBP|gbp)/,
   ];
 
   for (const re of patterns) {
@@ -597,7 +649,149 @@ function detectEmbeddedAts(rawHtml) {
   if ((m = html.match(/"[A-Z0-9_]*GREENHOUSE_BOARD[A-Z0-9_]*"\s*:\s*"([A-Za-z0-9_-]+)"/))) return { ats: 'greenhouse', slug: m[1] };
   if ((m = html.match(/"[A-Z0-9_]*LEVER_(?:SITE|BOARD|SLUG)[A-Z0-9_]*"\s*:\s*"([A-Za-z0-9_-]+)"/))) return { ats: 'lever', slug: m[1] };
   if ((m = html.match(/"[A-Z0-9_]*ASHBY_(?:JOB_BOARD|BOARD|ORG|SLUG)[A-Z0-9_]*"\s*:\s*"([A-Za-z0-9_%.-]+)"/))) return { ats: 'ashby', slug: decodeURIComponent(m[1]) };
+  // Workday: most enterprise/retail career sites are a thin marketing shell
+  // over a myworkdayjobs.com tenant — even when the shell itself renders
+  // client-side, it's common to find at least one absolute job/apply link to
+  // that tenant baked into the initial HTML (SEO previews, "recently posted"
+  // widgets, canonical tags). One such link is enough: it carries the
+  // tenant + datacenter + site triple fetchWorkday() needs, so hand back
+  // the canonical board URL (not a bare slug) as the "slug".
+  if ((m = html.match(/https?:\/\/([a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[a-z0-9_.%-]+)/i))) {
+    const parsed = parseWorkdayUrl(`https://${m[1]}`);
+    if (parsed) return { ats: 'workday', slug: `https://${parsed.tenant}.${parsed.dc}.myworkdayjobs.com/${parsed.site}` };
+  }
   return null;
+}
+
+// Extracts {tenant, dc, site} from any myworkdayjobs.com URL — the browser
+// URL and the wday/cxs API URL both encode the same triple, just with
+// different path shapes (an optional locale segment like "en-US" before the
+// site name, or "wday/cxs/<tenant>/<site>/..." for the API itself).
+function parseWorkdayUrl(url) {
+  try {
+    const u = new URL(url);
+    const m = u.hostname.match(/^([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com$/i);
+    if (!m) return null;
+    const [, tenant, dc] = m;
+    const parts = u.pathname.split('/').filter(Boolean);
+    const cxsIdx = parts.indexOf('cxs');
+    const site = cxsIdx >= 0 ? parts[cxsIdx + 2] : parts.find(p => !/^[a-z]{2}-[A-Z]{2}$/.test(p));
+    if (!site) return null;
+    return { tenant: tenant.toLowerCase(), dc: dc.toLowerCase(), site };
+  } catch { return null; }
+}
+
+// Workday's list endpoint only gives human text ("Posted Today", "Posted 3
+// Days Ago", "Posted 30+ Days Ago") — approximate it into an ISO date so the
+// usual maxAgeDays filter still works before a detail fetch (which DOES
+// carry a real startDate) happens. Unknown formats are kept, not dropped —
+// same "don't silently drop on missing data" policy as extractSalaryRange.
+function parseWorkdayPostedOn(text) {
+  const now = Date.now();
+  if (!text) return new Date(now).toISOString();
+  if (/today/i.test(text)) return new Date(now).toISOString();
+  if (/yesterday/i.test(text)) return new Date(now - 86400000).toISOString();
+  const m = text.match(/(\d+)\+?\s*Days?\s*Ago/i);
+  if (m) return new Date(now - parseInt(m[1], 10) * 86400000).toISOString();
+  return new Date(now).toISOString();
+}
+
+const WORKDAY_PAGE_SIZE = 20;
+const WORKDAY_MAX_JOBS = 400; // safety cap for very large boards
+const WORKDAY_DETAIL_FETCH_CAP = 10; // same spirit as CUSTOM_DETAIL_FETCH_CAP below
+
+async function fetchWorkdayList(tenant, dc, site) {
+  const jobs = [];
+  let offset = 0;
+  // Termination is driven by page length, NOT the response's "total" field —
+  // verified directly against a real tenant (Chanel's) that reports the
+  // correct total on the FIRST page only and total:0 on every page after,
+  // while jobPostings keeps coming back full. Trusting "total" there would
+  // stop pagination after just one page. A short/empty page is the reliable
+  // "no more results" signal for offset-based pagination regardless.
+  while (offset < WORKDAY_MAX_JOBS) {
+    const res = await fetch(`https://${tenant}.${dc}.myworkdayjobs.com/wday/cxs/${tenant}/${site}/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset, searchText: '' })
+    });
+    if (!res.ok) throw new Error(`Workday ${tenant}/${site}: HTTP ${res.status}`);
+    const data = await res.json();
+    const postings = data.jobPostings || [];
+    for (const p of postings) {
+      // A handful of postings (confidential reqs, seen in practice on large
+      // multi-brand tenants like Richemont's) come back with only a
+      // bulletFields req id — no title, no externalPath. Nothing to show or
+      // link to, so skip rather than push a broken job downstream.
+      if (!p.title || !p.externalPath) continue;
+      jobs.push({
+        title: p.title,
+        url: `https://${tenant}.${dc}.myworkdayjobs.com/en-US/${site}${p.externalPath}`,
+        updatedAt: parseWorkdayPostedOn(p.postedOn),
+        location: p.locationsText || '',
+        description: '',
+        _externalPath: p.externalPath
+      });
+    }
+    offset += WORKDAY_PAGE_SIZE;
+    if (postings.length < WORKDAY_PAGE_SIZE) break; // short page — that was the last one
+  }
+  return jobs;
+}
+
+async function fetchWorkdayDetail(tenant, dc, site, externalPath) {
+  const res = await fetch(`https://${tenant}.${dc}.myworkdayjobs.com/wday/cxs/${tenant}/${site}${externalPath}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const info = data.jobPostingInfo || {};
+  return { description: stripHtml(info.jobDescription || ''), startDate: info.startDate || null };
+}
+
+// Direct Workday ATS fetcher (companies.csv: ATS=workday, URL=any
+// https://<tenant>.<dc>.myworkdayjobs.com/<site> board URL). The list
+// endpoint has no description text and only an approximate posted date, so —
+// same pattern as fetchCustom's track-matched detail-fetch below — a capped
+// number of track-matched jobs get their detail page fetched for the real
+// description and startDate before scoring/salary extraction run.
+async function fetchWorkday(url) {
+  const parsed = parseWorkdayUrl(url);
+  if (!parsed) throw new Error(`Not a myworkdayjobs.com board URL: ${url}`);
+  const { tenant, dc, site } = parsed;
+  const jobs = await fetchWorkdayList(tenant, dc, site);
+  let enriched = 0;
+  for (const j of jobs) {
+    if (enriched >= WORKDAY_DETAIL_FETCH_CAP) break;
+    if (!classifyTrack(j.title)) continue;
+    enriched++;
+    const detail = await fetchWorkdayDetail(tenant, dc, site, j._externalPath).catch(() => null);
+    if (detail) {
+      j.description = detail.description;
+      if (detail.startDate) j.updatedAt = new Date(detail.startDate + 'T00:00:00Z').toISOString();
+    }
+  }
+  for (const j of jobs) delete j._externalPath;
+  return jobs;
+}
+
+// Verifies a Workday board is live (used by --add-company --ats=workday
+// --slug=<board URL>, and by the discovery-time slug resolver). Mirrors
+// probeGreenhouse/probeAshby/probeLever's {ats, slug, jobCount, boardName,
+// nameVerified} shape, but Workday's list endpoint doesn't expose a company
+// display name to check against, so nameVerified is always null (same as
+// Ashby/Lever above) — eyeball the board before trusting an auto-add.
+async function probeWorkday(url) {
+  const parsed = parseWorkdayUrl(url);
+  if (!parsed) return null;
+  const { tenant, dc, site } = parsed;
+  const res = await fetch(`https://${tenant}.${dc}.myworkdayjobs.com/wday/cxs/${tenant}/${site}/jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appliedFacets: {}, limit: 1, offset: 0, searchText: '' })
+  });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  if (!data || typeof data.total !== 'number') return null;
+  return { ats: 'workday', slug: `https://${tenant}.${dc}.myworkdayjobs.com/${site}`, jobCount: data.total, boardName: null };
 }
 
 // Mini-fetchers for ATSs we only reach via embedded detection.
@@ -660,7 +854,8 @@ async function fetchRippling(slug) {
 const EMBEDDED_ATS_FETCHERS = {
   greenhouse: fetchGreenhouse, ashby: fetchAshby, lever: fetchLever,
   workable: fetchWorkable, recruitee: fetchRecruitee,
-  smartrecruiters: fetchSmartRecruiters, rippling: fetchRippling
+  smartrecruiters: fetchSmartRecruiters, rippling: fetchRippling,
+  workday: fetchWorkday // detectEmbeddedAts hands back the full board URL as "slug" for this one
 };
 
 function extractJsonLdJobs(html, baseUrl) {
@@ -694,12 +889,43 @@ function extractJsonLdJobs(html, baseUrl) {
   return jobs.filter(j => j.title);
 }
 
+// Explicit chrome/nav phrases that share a URL path prefix with real job
+// links often enough to win the "biggest group" grouping below (category
+// filters, locale switchers, section headers) — seen in practice grouping
+// alongside genuine listings on several real career sites during testing
+// (e.g. "Life at M&S" / "Our Teams" / "Early Careers" all under
+// marksandspencer.com/careers/...). Matched against the FULL anchor text.
+const NAV_CHROME_TEXT_RE = new RegExp('^(' + [
+  'skip to [a-z ]+', 'back to top', 'return to filters?', 'back to search results?',
+  'search(?: \\d+)? (?:jobs?|roles?|positions?|openings?|results?)', '\\d+\\+?\\s*(?:jobs?|roles?|positions?|openings?|results?)',
+  'view all(?: jobs?| roles?)?', 'see all', 'apply(?: now| here)?', 'register',
+  'sign ?in', 'log ?in', 'learn more', 'read more', 'find out more', 'explore(?: careers?)?',
+  'get started', 'our teams?', 'life at [a-z&.\\s]+', 'early careers?', 'working here',
+  'about us', 'our culture', 'our values', 'our story', 'why join us', 'meet (?:the|our) team',
+  'benefits', 'diversity(?: ?(?:and|&) ?inclusion)?', 'sustainability', 'link to [a-z\\s]+ page',
+  'home', 'menu', 'contact us', 'faqs?', '[a-z]+ \\([a-z\\s]+\\)' // locale switcher e.g. "Deutsch (Deutschland)"
+].join('|') + ')$', 'i');
+
+// Prefix-style chrome, tested separately since these lead into free text that
+// a full-string denylist can't anticipate (an employee's name and role, an
+// arbitrary date) — "Meet our People: Katy Wright, Digital Coordinator" is an
+// employee spotlight page, not a job posting, even though it reads like one.
+const NAV_CHROME_PREFIX_RE = /^(meet (?:our|the) (?:people|team)\b|[a-z\s]+ jobs? [a-z]+ \d{1,2},? \d{4}$)/i;
+
+// Positive signal that a candidate actually reads like a job posting rather
+// than nav chrome that slipped past the denylist above (a category name, a
+// department link, etc.) — real postings overwhelmingly carry at least one
+// of: a digit (req id, hours, a date), a seniority/function word, an
+// employment-type word, or a trailing "City, Country"/"Remote" location.
+const JOB_TITLE_SIGNAL_RE = /\d|\b(senior|junior|lead|head|manager|director|assistant|associate|specialist|engineer|coordinator|executive|analyst|officer|consultant|supervisor|representative|technician|designer|developer|administrator|architect|strategist|planner|scientist|apprentice|intern|full[\s-]?time|part[\s-]?time|contract|permanent|temporary|remote|hybrid|freelance)\b/i;
+
 function extractJobLinks(html, baseUrl) {
   const anchors = [...html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
   const cands = [];
   for (const [, href, inner] of anchors) {
     const text = stripHtml(inner).trim();
     if (text.length < 5 || text.length > 90) continue;
+    if (NAV_CHROME_TEXT_RE.test(text) || NAV_CHROME_PREFIX_RE.test(text) || !JOB_TITLE_SIGNAL_RE.test(text)) continue;
     const url = absUrl(href, baseUrl);
     if (!url || !/^https?:/.test(url)) continue;
     if (!/(job|career|position|opening|opportunit|vacanc|role|gh_jid|lever|ashby|workable|recruitee)/i.test(url)) continue;
@@ -716,6 +942,10 @@ function extractJobLinks(html, baseUrl) {
   }
   let best = [];
   for (const g of groups.values()) if (g.length > best.length) best = g;
+  // Below this, it's not a confident "found a job list" signal — a couple of
+  // survivors that happen to share a URL prefix is exactly what a handful of
+  // stray nav links looks like too. Report no jobs rather than 1-2 guesses.
+  if (best.length < 3) return [];
   const seen = new Set();
   return best
     .filter(c => c.url !== baseUrl && !seen.has(c.url) && seen.add(c.url))
@@ -733,8 +963,18 @@ function extractJobLinks(html, baseUrl) {
 
 const CUSTOM_DETAIL_FETCH_CAP = 10; // detail pages fetched per company per scan
 
+// Arbitrary third-party marketing pages (unlike the known ATS APIs above)
+// can be slow or simply never respond — seen hanging a scan indefinitely
+// against a real company's careers page during testing. Everything in this
+// function that fetches one uses this timeout so one bad page can't eat the
+// whole run's CI budget.
+const CUSTOM_FETCH_TIMEOUT_MS = 15000;
+
 async function fetchCustom(co) {
-  const res = await fetch(co.url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; job-watch)' } });
+  const res = await fetch(co.url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; job-watch)' },
+    signal: AbortSignal.timeout(CUSTOM_FETCH_TIMEOUT_MS)
+  });
   if (!res.ok) throw new Error(`careers page ${co.url}: HTTP ${res.status}`);
   const html = await res.text();
 
@@ -762,7 +1002,10 @@ async function fetchCustom(co) {
     if (j.description || enriched >= CUSTOM_DETAIL_FETCH_CAP) continue;
     if (!classifyTrack(j.title)) continue;
     try {
-      const r = await fetch(j.url, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; job-watch)' } });
+      const r = await fetch(j.url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; job-watch)' },
+        signal: AbortSignal.timeout(CUSTOM_FETCH_TIMEOUT_MS)
+      });
       if (r.ok) { j.description = stripHtml(await r.text()); enriched++; }
     } catch { /* leave description empty */ }
   }
@@ -777,13 +1020,15 @@ async function fetchCustom(co) {
 //     Remotive: keyword search over remote jobs.
 //     The Muse: category browse across thousands of company boards.
 // =================================================================
-const DISCOVERY_QUERIES = [
+// Set per-config as "discoveryQueries"/"museCategories"; default here is this
+// project's original TPM/ops-focused search.
+const DISCOVERY_QUERIES = CONFIG.discoveryQueries || [
   'technical program manager', 'solutions engineer', 'sales engineer',
   'customer success manager', 'implementation engineer', 'support manager',
   'workflow automation', 'internal tools'
 ];
 
-const MUSE_CATEGORIES = [
+const MUSE_CATEGORIES = CONFIG.museCategories || [
   'Project Management', 'Account Management', 'Customer Service',
   'Business Operations', 'Sales'
 ];
@@ -821,15 +1066,6 @@ async function fetchMuse(category, page) {
     location: (j.locations || []).map(l => l.name).join('; '),
     description: stripHtml(j.contents || '')
   }));
-}
-
-// US-remote heuristic for discovery feeds (the direct ATS list doesn't need
-// this — you picked those companies). Keeps unknown/blank locations.
-function locationLooksUSRemote(loc) {
-  if (!loc) return true;
-  const l = loc.toLowerCase();
-  if (/(remote|flexible|united states|\busa?\b|worldwide|anywhere|americas)/.test(l)) return true;
-  return /,\s?[A-Z]{2}(;|$)/.test(loc); // "Austin, TX" style US city
 }
 
 async function discoverJobs(errors) {
@@ -941,6 +1177,17 @@ async function sendTelegramMessage(text) {
 
 function formatTelegramMessage(job, run) {
   const hoursAgo = Math.round((Date.now() - new Date(job.postedOrUpdated)) / 3600000);
+  const sourceTag = job.source ? ` (via ${job.source} discovery)` : '';
+  const locTag = job.isRemote ? '🏠 Remote' : '🏢 Hybrid';
+  const runLine = run ? `\n<i>${escapeHtml(run.timestampLocal)}</i>` : '';
+  if (!SCORING_ENABLED) {
+    return (
+      `<b>${escapeHtml(job.companyDisplay)}</b> — ${escapeHtml(job.title)} [${locTag}]${sourceTag}\n` +
+      `Track: ${escapeHtml(job.track)}\n` +
+      `Salary: ${escapeHtml(job.salary)} | Posted ${hoursAgo}h ago\n` +
+      `${job.url}${runLine}`
+    );
+  }
   const swaps = job.suggestedSwaps.length
     ? `\nSwap: ${job.suggestedSwaps.map(s => `"${s.youHaveAs}"→"${s.jdUsesPhrase}"`).join(', ')}`
     : '';
@@ -950,9 +1197,6 @@ function formatTelegramMessage(job, run) {
   const bonus = (job.bonusTerms || []).length
     ? `\n+ Bonus tools: ${job.bonusTerms.map(escapeHtml).join(', ')}`
     : '';
-  const sourceTag = job.source ? ` (via ${job.source} discovery)` : '';
-  const locTag = job.isRemote ? '🏠 Remote' : '🏢 Hybrid';
-  const runLine = run ? `\n<i>${escapeHtml(run.timestampLocal)}</i>` : '';
   return (
     `<b>${escapeHtml(job.companyDisplay)}</b> — ${escapeHtml(job.title)} [${locTag}]${sourceTag}\n` +
     `Track: ${escapeHtml(job.track)}\n` +
@@ -989,8 +1233,11 @@ function classifyTrack(title) {
 function scoreJob(job, trackKey) {
   const track = TRACKS[trackKey];
   const descLower = job.description.toLowerCase();
-  const coreTerms = track.skillTerms.core || [];
-  const bonusTerms = track.skillTerms.bonus || [];
+  // A "scoring": false config (see SCORING_ENABLED above) has no reason to
+  // define skillTerms on its tracks — tolerate it missing entirely rather
+  // than requiring every config to carry a dead field.
+  const coreTerms = (track.skillTerms && track.skillTerms.core) || [];
+  const bonusTerms = (track.skillTerms && track.skillTerms.bonus) || [];
   const allTerms = [...coreTerms, ...bonusTerms];
 
   const haveTerms = coreTerms.filter(term => descLower.includes(term.toLowerCase()));
@@ -1118,12 +1365,12 @@ async function scanAll(opts = {}) {
       matchedTerms: haveTerms,
       bonusTerms: haveBonusTerms,
       suggestedSwaps,
-      salary: salary ? `$${salary.min.toLocaleString()}-$${salary.max.toLocaleString()}` : 'not listed'
+      salary: salary ? `${CURRENCY_SYMBOL}${salary.min.toLocaleString()}-${CURRENCY_SYMBOL}${salary.max.toLocaleString()}` : 'not listed'
     });
   };
 
   const directPass = Promise.all(companies.map(async (co) => {
-    const label = co.ats === 'custom' ? `${co.name} (custom: ${co.url})` : `${co.name} (${co.ats}/${co.slug})`;
+    const label = usesUrlColumn(co.ats) ? `${co.name} (${co.ats}: ${co.url})` : `${co.name} (${co.ats}/${co.slug})`;
     const stat = newFeedStat(label);
     try {
       let jobs;
@@ -1131,6 +1378,8 @@ async function scanAll(opts = {}) {
         const scraped = await fetchCustom(co);
         stat.method = scraped.method;
         jobs = scraped.jobs;
+      } else if (co.ats === 'workday') {
+        jobs = await fetchWorkday(co.url);
       } else {
         const fetcher = FETCHERS[co.ats];
         if (!fetcher) throw new Error(`Unknown ATS: ${co.ats}`);
@@ -1154,7 +1403,6 @@ async function scanAll(opts = {}) {
         const trackedNames = new Set(companies.map(c => normName(c.name)));
         for (const job of rawJobs) {
           if (trackedNames.has(normName(job.companyName))) { stat.skippedAlreadyTracked++; continue; }
-          if (!locationLooksUSRemote(job.location)) continue;
           consider(job, job.companyName, job.source, stat);
         }
       })
@@ -1202,7 +1450,7 @@ function printFeedStats(feedStats) {
 }
 
 function printTable(results, meta) {
-  console.log(`\nFound ${results.length} matching roles (min salary floor: $${meta.minSalary.toLocaleString()}, max age: ${meta.maxAgeDays}d, remote-in-region or approved hybrid/onsite cities only — see this config's "location"):\n`);
+  console.log(`\nFound ${results.length} matching roles (min salary floor: ${CURRENCY_SYMBOL}${meta.minSalary.toLocaleString()}, max age: ${meta.maxAgeDays}d, remote-in-region or approved hybrid/onsite cities only — see this config's "location"):\n`);
   if (meta.droppedForSalary) {
     console.log(`(Filtered out ${meta.droppedForSalary} posting(s) below the floor.)`);
   }
@@ -1222,16 +1470,18 @@ function printTable(results, meta) {
     const hoursAgo = Math.round((Date.now() - new Date(r.postedOrUpdated)) / 3600000);
     console.log(`── ${r.companyDisplay} — ${r.title} [${r.isRemote ? 'REMOTE' : 'hybrid/onsite'}]${r.source ? ` [discovered via ${r.source}]` : ''}`);
     console.log(`   Track: ${r.track} (use ${r.resumeFile})`);
-    console.log(`   Location: ${r.location || 'n/a'} | Salary: ${r.salary} | Posted/updated: ${hoursAgo}h ago | Match: ${r.matchPct}%`);
+    console.log(`   Location: ${r.location || 'n/a'} | Salary: ${r.salary} | Posted/updated: ${hoursAgo}h ago${SCORING_ENABLED ? ` | Match: ${r.matchPct}%` : ''}`);
     console.log(`   Apply direct: ${r.url}`);
-    if (r.matchedTerms && r.matchedTerms.length) {
-      console.log(`   Matched: ${r.matchedTerms.join(', ')}`);
-    }
-    if (r.bonusTerms && r.bonusTerms.length) {
-      console.log(`   + Bonus tools: ${r.bonusTerms.join(', ')}`);
-    }
-    if (r.suggestedSwaps.length) {
-      console.log(`   Keyword swaps to make: ${r.suggestedSwaps.map(s => `"${s.youHaveAs}" -> "${s.jdUsesPhrase}"`).join(', ')}`);
+    if (SCORING_ENABLED) {
+      if (r.matchedTerms && r.matchedTerms.length) {
+        console.log(`   Matched: ${r.matchedTerms.join(', ')}`);
+      }
+      if (r.bonusTerms && r.bonusTerms.length) {
+        console.log(`   + Bonus tools: ${r.bonusTerms.join(', ')}`);
+      }
+      if (r.suggestedSwaps.length) {
+        console.log(`   Keyword swaps to make: ${r.suggestedSwaps.map(s => `"${s.youHaveAs}" -> "${s.jdUsesPhrase}"`).join(', ')}`);
+      }
     }
     console.log('');
   }
@@ -1266,11 +1516,17 @@ function describeHit(h) {
 // how to force the right one.
 async function addCompanyByName(name, forced) {
   if (forced) {
-    const probe = PROBES[forced.ats];
-    if (!probe) { console.error(`Unknown ATS "${forced.ats}" — use greenhouse | ashby | lever.`); return; }
+    // Workday isn't in PROBES (see the comment above it) — --slug= carries
+    // the full myworkdayjobs.com board URL instead of a short slug for this
+    // one ATS, and the hit gets saved into the URL column, not Slug.
+    const probe = forced.ats === 'workday' ? probeWorkday : PROBES[forced.ats];
+    if (!probe) { console.error(`Unknown ATS "${forced.ats}" — use greenhouse | ashby | lever | workday.`); return; }
     const hit = await probe(forced.slug).catch(() => null);
     if (!hit) { console.error(`No live ${forced.ats} board at slug "${forced.slug}".`); return; }
-    const added = saveExtraCompany({ name, ats: hit.ats, slug: hit.slug, via: 'manual' });
+    const entry = hit.ats === 'workday'
+      ? { name, ats: 'workday', url: hit.slug, via: 'manual' }
+      : { name, ats: hit.ats, slug: hit.slug, via: 'manual' };
+    const added = saveExtraCompany(entry);
     console.log(added ? `Added ${name}: ${describeHit(hit)}` : `${name} (${hit.ats}/${hit.slug}) is already tracked.`);
     return;
   }
@@ -1280,7 +1536,9 @@ async function addCompanyByName(name, forced) {
   if (!hits.length) {
     console.log(`  No live board found. If you know the board, force it:\n` +
       `  node job_watch.js --add-company="${name}" --ats=<greenhouse|ashby|lever> --slug=<slug>\n` +
-      `  Or, if they have their own careers page, scrape it directly (no AI):\n` +
+      `  node job_watch.js --add-company="${name}" --ats=workday --slug=<https://tenant.dcN.myworkdayjobs.com/site>\n` +
+      `  Or, if they have their own careers page, scrape it directly (no AI — this also auto-detects an\n` +
+      `  embedded Workday, Greenhouse, Ashby, Lever, Workable, Recruitee, SmartRecruiters or Rippling board):\n` +
       `  node job_watch.js --add-company="${name}" --careers-url="https://..."`);
     return;
   }
@@ -1332,7 +1590,7 @@ const AUTOADD_MAX_PER_RUN = 8;
 
 async function autoAddDiscoveredCompanies(newJobs, minMatch) {
   const names = [...new Set(
-    newJobs.filter(j => j.source && j.matchPct >= minMatch).map(j => j.companyDisplay)
+    newJobs.filter(j => j.source && (!SCORING_ENABLED || j.matchPct >= minMatch)).map(j => j.companyDisplay)
   )];
   if (!names.length) return;
 
@@ -1484,7 +1742,7 @@ async function performScan(opts = {}) {
     const statusLog = jsonOut ? console.error : console.log;
     const telegramConfigured = !!(process.env[CONFIG.telegram.botTokenEnv] && process.env[CONFIG.telegram.chatIdEnv]);
     if (!noTelegram && telegramConfigured) {
-      const toSend = newSinceLastScan.filter(j => j.matchPct >= minMatch);
+      const toSend = SCORING_ENABLED ? newSinceLastScan.filter(j => j.matchPct >= minMatch) : newSinceLastScan;
       let sent = 0;
       for (const job of toSend) {
         const ok = await sendTelegramMessage(formatTelegramMessage(job, run));
@@ -1521,6 +1779,6 @@ module.exports = {
   CONFIG, DATA_DIR, DISCOVERY_QUERIES,
   classifyTrack, scoreJob, locationAllowed,
   REMOTE_INCLUDE_RE, REMOTE_EXCLUDE_RE,
-  MIN_SALARY, GOOD_MATCH_THRESHOLD, MAX_AGE_DAYS, EXCLUDED_TITLE_TERMS,
+  MIN_SALARY, GOOD_MATCH_THRESHOLD, MAX_AGE_DAYS, EXCLUDED_TITLE_TERMS, CURRENCY_SYMBOL, SCORING_ENABLED,
   formatTelegramMessage, setApiLogEnabled
 };

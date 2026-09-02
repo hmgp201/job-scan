@@ -59,6 +59,27 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: node hiring_cafe_scan.js --config=default --quiet
 
+      # Second, independent search: configs/uk-design/config.json — Technical
+      # Design / Retail Design roles (Kit Pethel), remote (or open-to-UK
+      # remote elsewhere)/hybrid/onsite in London UK. Same bot as the default
+      # search (TELEGRAM_BOT_TOKEN) but a different Telegram chat/channel
+      # (TELEGRAM_CHAT_ID_UK_DESIGN), own state files under configs/uk-design/.
+      #
+      # NOTE: this profile has NO direct-ATS (job_watch.js) scan step here —
+      # deliberately retired. That mechanism (a curated Greenhouse/Ashby/
+      # Lever/Workday company list) skews heavily toward VC-funded US tech
+      # companies and never surfaced a single genuinely UK-located match
+      # (see configs/uk-design/companies.csv, kept on disk but no longer
+      # scanned — a UK design/retail-industry search is much better served
+      # by UK-market job-board APIs, see scan-uk-boards.yml). hiring.cafe
+      # stays here since it's a broad, region-configurable aggregator, not a
+      # curated company list.
+      - name: Run scan (uk-design, hiring.cafe)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID_UK_DESIGN: ${{ secrets.TELEGRAM_CHAT_ID_UK_DESIGN }}
+        run: node hiring_cafe_scan.js --config=uk-design --quiet
+
       # Pushes can be rejected if origin/main moved since checkout — e.g. a
       # manual push landing mid-run, or an overlapping run slipping past the
       # concurrency group. Retry with a merge favoring our just-computed
@@ -69,7 +90,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          for f in configs/default/last_scan.json configs/default/slug_cache.json configs/default/companies.csv configs/default/last_scan_hiringcafe.json; do
+          for f in configs/default/last_scan.json configs/default/slug_cache.json configs/default/companies.csv configs/default/last_scan_hiringcafe.json \
+                   configs/uk-design/last_scan_hiringcafe.json; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           if git diff --cached --quiet; then

@@ -1,0 +1,163 @@
+{
+  "name": "uk-design",
+  "label": "Technical Design / Retail Design (Kit Pethel — UK)",
+  "telegram": {
+    "botTokenEnv": "TELEGRAM_BOT_TOKEN",
+    "chatIdEnv": "TELEGRAM_CHAT_ID_UK_DESIGN"
+  },
+  "currency": "GBP",
+  "currencySymbol": "£",
+  "minSalary": 65000,
+  "minMatch": 3,
+  "hiringCafeMinMatch": 2,
+  "maxAgeDays": 3,
+  "excludedTitleTerms": [
+    "intern",
+    "internship",
+    "apprentice",
+    "graduate scheme",
+    "data centre",
+    "data center",
+    "enterprise it"
+  ],
+  "location": {
+    "remoteIncludePattern": "united kingdom|\\buk\\b|\\blondon\\b|\\bengland\\b|\\bscotland\\b|\\bwales\\b|northern ireland|europe|\\bemea\\b|worldwide|anywhere|global|international",
+    "remoteExcludePattern": "united states|\\bus\\b|\\busa\\b|north america|americas|\\bcanada\\b|apac|latam|mena|\\baustralia\\b|new zealand|\\bchina\\b|\\bjapan\\b|south korea|\\bkorea\\b|\\bindia\\b|singapore|hong kong|\\btaiwan\\b|thailand|vietnam|indonesia|malaysia|philippines|pakistan|bangladesh|\\bnepal\\b|sri lanka|united arab emirates|\\buae\\b|saudi arabia|\\bksa\\b|\\bisrael\\b|\\bqatar\\b|\\bkuwait\\b|bahrain|\\boman\\b|\\bjordan\\b|lebanon|\\begypt\\b|south africa|nigeria|\\bkenya\\b|morocco|\\bghana\\b|\\bmexico\\b|\\bbrazil\\b|argentina|\\bchile\\b|colombia|\\bperu\\b|ecuador|venezuela|uruguay|costa rica|\\bpanama\\b|guatemala",
+    "hybridOnsiteAllowed": [
+      "london",
+      "greater london",
+      "central london",
+      "london, uk",
+      "london, united kingdom",
+      "london, england"
+    ]
+  },
+  "discoveryQueries": [
+    "technical designer",
+    "senior technical designer",
+    "technical design manager",
+    "technical design lead",
+    "technical design director",
+    "retail design manager",
+    "retail designer",
+    "store design manager",
+    "store design",
+    "visual merchandising manager",
+    "environments designer",
+    "experiential designer",
+    "exhibition designer",
+    "shopfitting",
+    "retail environments"
+  ],
+  "museCategories": [],
+  "boardQueries": [
+    "technical designer",
+    "retail design manager",
+    "technical design manager",
+    "visual merchandising manager",
+    "store design"
+  ],
+  "adzunaCountry": "gb",
+  "hiringCafeLocation": {
+    "formatted_address": "United Kingdom",
+    "types": ["country"],
+    "geometry": { "location": { "lat": "55.378051", "lon": "-3.435973" } },
+    "id": "user_country",
+    "address_components": [{ "long_name": "United Kingdom", "short_name": "GB", "types": ["country"] }],
+    "options": { "flexible_regions": ["anywhere_in_continent", "anywhere_in_world"] }
+  },
+  "tracks": {
+    "technical_design": {
+      "label": "Technical Design / Retail Design",
+      "resumeFile": "Kit Pethel CV V6.docx",
+      "titleKeywords": [
+        "senior technical designer",
+        "technical design director",
+        "technical design lead",
+        "technical design manager",
+        "retail design manager",
+        "technical design",
+        "retail design",
+        "technical designer"
+      ],
+      "skillTerms": {
+        "core": [
+          "retail fixtures",
+          "visual merchandising",
+          "point of sale",
+          "luxury retail",
+          "retail activations",
+          "popup",
+          "pop-up",
+          "shopfitting",
+          "flagship store",
+          "department store",
+          "store rollout",
+          "store design",
+          "retail environments",
+          "retail interiors",
+          "in-store",
+          "brand experience",
+          "cnc",
+          "laser cutting",
+          "3d printing",
+          "joinery",
+          "mdf",
+          "acrylic",
+          "fabrication",
+          "manufacturing drawings",
+          "bill of materials",
+          "experiential",
+          "exhibition design",
+          "prototyping",
+          "cosmetics",
+          "fashion retail"
+        ],
+        "bonus": [
+          "cad",
+          "solidworks",
+          "fusion 360",
+          "autocad",
+          "3d modelling",
+          "3d modeling",
+          "google sketchup",
+          "solidedge",
+          "draftsight",
+          "autodesk inventor",
+          "ansys",
+          "spaceclaim",
+          "adobe illustrator",
+          "adobe indesign",
+          "adobe photoshop",
+          "gamification",
+          "interactive installation",
+          "lighting integration",
+          "electrical integration",
+          "line management",
+          "recruiting",
+          "process improvement",
+          "health and safety",
+          "import export",
+          "logistics",
+          "stakeholder management",
+          "project management",
+          "quality control",
+          "design standards",
+          "client relationship management",
+          "installation"
+        ]
+      }
+    }
+  },
+  "synonyms": [
+    ["3d cad", "cad"],
+    ["computer aided design", "cad"],
+    ["visual merchandising", "vm"],
+    ["point of sale", "pop display"],
+    ["experiential marketing", "experiential"],
+    ["retail environments", "retail fixtures"],
+    ["shopfitting", "retail fixtures"],
+    ["store design", "retail design"],
+    ["environments design", "experiential"]
+  ]
+}
