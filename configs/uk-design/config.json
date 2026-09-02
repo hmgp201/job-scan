@@ -10,7 +10,7 @@
   "minSalary": 65000,
   "minMatch": 3,
   "hiringCafeMinMatch": 2,
-  "maxAgeDays": 3,
+  "maxAgeDays": 7,
   "excludedTitleTerms": [
     "intern",
     "internship",
