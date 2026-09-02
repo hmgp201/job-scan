@@ -11,7 +11,9 @@
     "scan:ukdesign": "node job_watch.js --config=uk-design",
     "scan:ukdesign:hiringcafe": "node hiring_cafe_scan.js --config=uk-design",
     "scan:ukdesign:adzuna": "node adzuna_scan.js --config=uk-design",
-    "scan:ukdesign:reed": "node reed_scan.js --config=uk-design"
+    "scan:ukdesign:reed": "node reed_scan.js --config=uk-design",
+    "query:adzuna": "node adzuna_query.js",
+    "query:reed": "node reed_query.js"
   },
   "engines": {
     "node": ">=18"
