@@ -6,5 +6,10 @@
   "crowdstrike": {
     "unresolved": true,
     "resolvedAt": "2026-08-30T23:55:52.660Z"
+  },
+  "samsarainc": {
+    "ats": "greenhouse",
+    "slug": "samsara",
+    "resolvedAt": "2026-10-10T20:15:51.460Z"
   }
 }
